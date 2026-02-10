@@ -1,0 +1,16 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# OS files
+.DS_Store
+
+# Claude Code local settings (user-specific, not shared)
+.claude/settings.local.json

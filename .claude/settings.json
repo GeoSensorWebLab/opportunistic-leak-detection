@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git remote:*)",
+      "Bash(gh auth status:*)",
+      "Bash(gh api:*)",
+      "Bash(timeout 8 .venv/bin/streamlit run:*)"
+    ]
+  }
+}

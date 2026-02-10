@@ -1,0 +1,13 @@
+[project]
+name = "methanesimulator"
+version = "0.1.0"
+description = "Methane Leak Opportunistic Tasking System"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "plotly>=5.14",
+    "streamlit>=1.28",
+]
