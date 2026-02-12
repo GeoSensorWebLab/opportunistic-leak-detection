@@ -27,6 +27,10 @@ def get_leak_sources() -> List[dict]:
             "y": 130.0,
             "z": 0.0,
             "emission_rate": 0.3,
+            "equipment_type": "wellhead",
+            "age_years": 22,
+            "production_rate_mcfd": 850.0,
+            "last_inspection_days": 120,
         },
         {
             "name": "Compressor Station B",
@@ -34,6 +38,10 @@ def get_leak_sources() -> List[dict]:
             "y": -140.0,
             "z": 2.0,
             "emission_rate": 0.8,
+            "equipment_type": "compressor",
+            "age_years": 8,
+            "production_rate_mcfd": 5200.0,
+            "last_inspection_days": 45,
         },
         {
             "name": "Pipeline Junction C",
@@ -41,6 +49,10 @@ def get_leak_sources() -> List[dict]:
             "y": -30.0,
             "z": 0.0,
             "emission_rate": 0.15,
+            "equipment_type": "pipeline_junction",
+            "age_years": 15,
+            "production_rate_mcfd": 3100.0,
+            "last_inspection_days": 200,
         },
         {
             "name": "Storage Tank D",
@@ -48,6 +60,10 @@ def get_leak_sources() -> List[dict]:
             "y": -270.0,
             "z": 3.0,
             "emission_rate": 1.2,
+            "equipment_type": "storage_tank",
+            "age_years": 30,
+            "production_rate_mcfd": 0.0,
+            "last_inspection_days": 90,
         },
         {
             "name": "Valve Cluster E",
@@ -55,6 +71,10 @@ def get_leak_sources() -> List[dict]:
             "y": -60.0,
             "z": 0.5,
             "emission_rate": 0.4,
+            "equipment_type": "valve",
+            "age_years": 12,
+            "production_rate_mcfd": 2400.0,
+            "last_inspection_days": 60,
         },
     ]
 

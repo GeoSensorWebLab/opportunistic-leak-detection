@@ -33,6 +33,35 @@ CACHE_MAX_ENTRIES = 32         # Max entries for opportunity map cache
 # --- Visualization ---
 COMPASS_POSITION = (-400, 400)  # (x, y) data-coord position of compass rose on plots
 
+# --- Prior Belief Model ---
+# Equipment type base leak rates (annual probability of significant leak)
+# Source: EPA GHGRP & API 2014 compressor/component studies
+EQUIPMENT_LEAK_RATES = {
+    "compressor": 0.12,        # Highest risk: rotating equipment, seals
+    "valve": 0.08,             # Packing and stem leaks
+    "pipeline_junction": 0.06, # Flange and connector leaks
+    "storage_tank": 0.05,      # Thief hatches, PRVs
+    "wellhead": 0.04,          # Casing, tubing connections
+    "separator": 0.07,         # Vessel connections
+    "default": 0.05,           # Fallback for unknown types
+}
+
+# Age factor: leak probability increases with equipment age
+# P_age = 1 + AGE_FACTOR_SCALE * (age / AGE_REFERENCE_YEARS)^AGE_FACTOR_EXPONENT
+AGE_REFERENCE_YEARS = 20.0    # Reference age for normalization
+AGE_FACTOR_SCALE = 1.0        # Scale of age contribution
+AGE_FACTOR_EXPONENT = 1.5     # Superlinear aging (accelerating degradation)
+
+# Production rate factor: higher throughput = more mechanical stress
+PRODUCTION_RATE_REFERENCE_MCFD = 3000.0  # Reference production for normalization
+PRODUCTION_RATE_SCALE = 0.3   # Moderate influence of production rate
+
+# Inspection recency factor: longer since inspection = higher uncertainty
+INSPECTION_DECAY_DAYS = 90.0  # Half-life for inspection benefit (days)
+
+# Spatial prior kernel: how far each source's prior influence extends
+PRIOR_KERNEL_RADIUS_M = 100.0  # Gaussian kernel radius for spatial prior
+
 # --- Pasquill-Gifford Stability Classes ---
 # Coefficients for sigma_y and sigma_z: sigma = a * x^b
 # x in meters, sigma in meters
