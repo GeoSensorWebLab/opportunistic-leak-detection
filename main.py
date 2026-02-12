@@ -14,9 +14,19 @@ import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
 
-from data.mock_data import get_leak_sources, get_baseline_path, get_wind_scenarios
+from data.mock_data import (
+    get_leak_sources,
+    get_baseline_path,
+    get_wind_scenarios,
+    get_wind_distribution,
+    get_wind_fan,
+)
 from data.facility_layout import get_facility_layout
-from optimization.opportunity_map import cached_opportunity_map, create_grid
+from optimization.opportunity_map import (
+    cached_opportunity_map,
+    cached_ensemble_opportunity_map,
+    create_grid,
+)
 from optimization.tasking import (
     compute_tasking_scores,
     cached_path_deviation,
@@ -25,6 +35,8 @@ from optimization.tasking import (
 )
 from optimization.metrics import compute_route_metrics, find_nearest_source
 from models.prior import compute_all_priors, create_spatial_prior
+from models.measurement import Measurement
+from models.bayesian import BayesianBeliefMap
 from visualization.plots import (
     create_site_figure,
     create_single_map_figure,
@@ -43,6 +55,8 @@ from config import (
     TOP_K_RECOMMENDATIONS,
     SENSOR_MDL_PPM,
     DETECTION_THRESHOLD_PPM,
+    DEFAULT_ENSEMBLE_SCENARIOS,
+    DEFAULT_WIND_SPREAD_DEG,
 )
 
 # ── Page Config ──────────────────────────────────────────────────────────────
@@ -99,6 +113,66 @@ stability_class = st.sidebar.select_slider(
     options=["A", "B", "C", "D", "E", "F"],
     value=default_stab,
 )
+
+# ── Wind Ensemble ───────────────────────────────────────────────────────────
+
+use_ensemble = st.sidebar.checkbox(
+    "Enable wind ensemble",
+    value=False,
+    help="Average detection probability across multiple wind scenarios "
+         "to make recommendations robust to wind variability.",
+)
+
+wind_scenarios = None
+if use_ensemble:
+    ensemble_mode = st.sidebar.radio(
+        "Ensemble Mode",
+        ["8-Direction Rose", "Directional Fan", "Custom Scenarios"],
+    )
+
+    if ensemble_mode == "8-Direction Rose":
+        wind_scenarios = get_wind_distribution()
+    elif ensemble_mode == "Directional Fan":
+        fan_center = st.sidebar.slider(
+            "Fan Center Direction",
+            min_value=0,
+            max_value=359,
+            value=wind_direction,
+            step=5,
+        )
+        fan_spread = st.sidebar.slider(
+            "Fan Spread (degrees)",
+            min_value=5.0,
+            max_value=90.0,
+            value=DEFAULT_WIND_SPREAD_DEG,
+            step=5.0,
+        )
+        fan_count = st.sidebar.slider(
+            "Number of Scenarios",
+            min_value=3,
+            max_value=16,
+            value=DEFAULT_ENSEMBLE_SCENARIOS,
+        )
+        wind_scenarios = get_wind_fan(
+            center_direction=float(fan_center),
+            spread_deg=fan_spread,
+            num_scenarios=fan_count,
+            speed=wind_speed,
+            stability_class=stability_class,
+        )
+    else:  # Custom Scenarios — use existing presets with equal weights
+        presets = get_wind_scenarios()
+        wind_scenarios = [
+            {
+                "direction": p["direction"],
+                "speed": p["speed"],
+                "stability_class": p["stability_class"],
+                "weight": 1.0 / len(presets),
+            }
+            for p in presets
+        ]
+
+    st.sidebar.caption(f"Ensemble: {len(wind_scenarios)} scenarios")
 
 # ── Compass Widget (sidebar) ────────────────────────────────────────────────
 
@@ -173,6 +247,59 @@ use_prior = st.sidebar.checkbox(
          "and inspection recency.",
 )
 
+# ── Bayesian Update Settings ───────────────────────────────────────────────
+
+st.sidebar.header("Bayesian Updates")
+
+use_bayesian = st.sidebar.checkbox(
+    "Enable Bayesian belief updating",
+    value=False,
+    help="Update the belief map with field observations (detections or "
+         "non-detections) to refine leak location estimates. Requires "
+         "prior risk model to be enabled.",
+)
+
+if use_bayesian and not use_prior:
+    st.sidebar.warning("Bayesian updates require the prior risk model to be enabled.")
+    use_bayesian = False
+
+if use_bayesian:
+    st.sidebar.subheader("Add Measurement")
+    meas_x = st.sidebar.number_input("Measurement X (m)", value=0.0, step=10.0)
+    meas_y = st.sidebar.number_input("Measurement Y (m)", value=0.0, step=10.0)
+    meas_conc = st.sidebar.number_input(
+        "Concentration (ppm)", value=0.0, min_value=0.0, step=1.0,
+    )
+    meas_detected = st.sidebar.checkbox("Detection triggered", value=False)
+
+    col_add, col_reset = st.sidebar.columns(2)
+    add_measurement = col_add.button("Add Measurement")
+    reset_belief = col_reset.button("Reset Belief")
+
+    # Initialize session state for Bayesian belief map
+    if "bayesian_measurements" not in st.session_state:
+        st.session_state.bayesian_measurements = []
+
+    if reset_belief:
+        st.session_state.bayesian_measurements = []
+        if "belief_map_obj" in st.session_state:
+            del st.session_state["belief_map_obj"]
+
+    if add_measurement:
+        new_meas = Measurement(
+            x=meas_x,
+            y=meas_y,
+            concentration_ppm=meas_conc,
+            detected=meas_detected,
+            wind_speed=wind_speed,
+            wind_direction_deg=float(wind_direction),
+            stability_class=stability_class,
+        )
+        st.session_state.bayesian_measurements.append(new_meas)
+
+    n_meas = len(st.session_state.get("bayesian_measurements", []))
+    st.sidebar.caption(f"Measurements recorded: {n_meas}")
+
 # ── Data ─────────────────────────────────────────────────────────────────────
 
 sources = get_leak_sources()
@@ -199,16 +326,46 @@ sources_key = tuple(
 baseline_path_key = tuple(tuple(row) for row in baseline_path)
 
 with st.spinner("Computing plume dispersion and opportunity map..."):
-    X, Y, concentration_ppm, detection_prob = cached_opportunity_map(
-        sources_key=sources_key,
-        wind_speed=wind_speed,
-        wind_direction_deg=wind_direction,
-        stability_class=stability_class,
-        grid_size=GRID_SIZE_M,
-        resolution=grid_resolution,
-        mdl_ppm=sensor_mdl,
-        threshold_ppm=sensor_threshold,
-    )
+    if use_ensemble and wind_scenarios:
+        scenarios_key = tuple(
+            (s["direction"], s["speed"], s["stability_class"], s["weight"])
+            for s in wind_scenarios
+        )
+        X, Y, concentration_ppm, detection_prob = cached_ensemble_opportunity_map(
+            sources_key=sources_key,
+            scenarios_key=scenarios_key,
+            grid_size=GRID_SIZE_M,
+            resolution=grid_resolution,
+            mdl_ppm=sensor_mdl,
+            threshold_ppm=sensor_threshold,
+        )
+    else:
+        X, Y, concentration_ppm, detection_prob = cached_opportunity_map(
+            sources_key=sources_key,
+            wind_speed=wind_speed,
+            wind_direction_deg=wind_direction,
+            stability_class=stability_class,
+            grid_size=GRID_SIZE_M,
+            resolution=grid_resolution,
+            mdl_ppm=sensor_mdl,
+            threshold_ppm=sensor_threshold,
+        )
+
+    # ── Bayesian Belief Update ──────────────────────────────────────────────
+    belief_map = None
+    scoring_prior = spatial_prior  # default: raw prior (or None)
+
+    if use_bayesian and spatial_prior is not None:
+        bayesian_obj = BayesianBeliefMap(
+            grid_x=X,
+            grid_y=Y,
+            prior=spatial_prior,
+            sources=sources,
+        )
+        for m in st.session_state.get("bayesian_measurements", []):
+            bayesian_obj.update(m)
+        belief_map = bayesian_obj.get_belief_map()
+        scoring_prior = belief_map  # posterior replaces raw prior in scoring
 
     # Cached path deviation (independent of wind — computed once)
     deviation = cached_path_deviation(
@@ -225,7 +382,7 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
         epsilon=DEVIATION_EPSILON,
         max_deviation=float(max_deviation),
         precomputed_deviation=deviation,
-        prior_weight=spatial_prior,
+        prior_weight=scoring_prior,
     )
 
     recommendations = recommend_waypoints(
@@ -259,11 +416,15 @@ m5.metric("Avg Detection Prob", f"{metrics['avg_detection_prob']:.1%}")
 
 # ── Tabbed Visualization ────────────────────────────────────────────────────
 
-tab_detect, tab_conc, tab_dual = st.tabs([
-    "Detection Map",
-    "Concentration Map",
-    "Side-by-Side",
-])
+tab_names = ["Detection Map", "Concentration Map", "Side-by-Side"]
+if use_bayesian and belief_map is not None:
+    tab_names.append("Belief Map")
+
+tabs = st.tabs(tab_names)
+tab_detect = tabs[0]
+tab_conc = tabs[1]
+tab_dual = tabs[2]
+tab_belief = tabs[3] if len(tabs) > 3 else None
 
 with tab_detect:
     fig_detect = create_single_map_figure(
@@ -307,6 +468,66 @@ with tab_dual:
         facility_layout=facility_layout,
     )
     st.plotly_chart(fig_site, use_container_width=True)
+
+if tab_belief is not None and belief_map is not None:
+    with tab_belief:
+        fig_belief = create_single_map_figure(
+            grid_x=X,
+            grid_y=Y,
+            detection_prob=belief_map,
+            sources=sources,
+            baseline_path=baseline_path,
+            optimized_path=optimized_path,
+            recommendations=recommendations,
+            wind_speed=wind_speed,
+            wind_direction_deg=wind_direction,
+            facility_layout=facility_layout,
+            colorbar_title="P(leak)",
+        )
+        # Overlay measurement markers
+        measurements = st.session_state.get("bayesian_measurements", [])
+        if measurements:
+            det_x = [m.x for m in measurements if m.detected]
+            det_y = [m.y for m in measurements if m.detected]
+            nodet_x = [m.x for m in measurements if not m.detected]
+            nodet_y = [m.y for m in measurements if not m.detected]
+
+            if det_x:
+                import plotly.graph_objects as go
+                fig_belief.add_trace(
+                    go.Scatter(
+                        x=det_x,
+                        y=det_y,
+                        mode="markers",
+                        marker=dict(
+                            size=14,
+                            color="limegreen",
+                            symbol="circle",
+                            line=dict(width=2, color="white"),
+                        ),
+                        name="Detection (+)",
+                        hovertemplate="Detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+                    )
+                )
+            if nodet_x:
+                import plotly.graph_objects as go
+                fig_belief.add_trace(
+                    go.Scatter(
+                        x=nodet_x,
+                        y=nodet_y,
+                        mode="markers",
+                        marker=dict(
+                            size=14,
+                            color="red",
+                            symbol="x",
+                            line=dict(width=2, color="white"),
+                        ),
+                        name="Non-detection (-)",
+                        hovertemplate="Non-detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+                    )
+                )
+
+        st.plotly_chart(fig_belief, use_container_width=True)
 
 # Score bar chart
 fig_scores = create_score_profile(recommendations)
@@ -387,6 +608,16 @@ with st.expander("About the Model"):
 
         **Tasking Score** — {scoring_formula}
         where `epsilon` prevents division-by-zero for on-path locations.
+
+        **Bayesian Belief Update** — When enabled, field observations
+        (detections and non-detections) update the spatial belief map via
+        cell-wise Bayes' theorem, refining leak location estimates after
+        each measurement (Stage 2 of Bayesian architecture).
+
+        **Wind Ensemble** — When enabled, averages detection probability
+        across multiple wind scenarios (rose, directional fan, or custom)
+        to make recommendations robust to wind variability during a
+        30-45 min inspection walk.
 
         **Optimized Path** — Inserts high-score waypoints as detours into the
         worker's baseline inspection route.

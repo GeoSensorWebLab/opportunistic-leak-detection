@@ -105,6 +105,99 @@ def compute_opportunity_map(
     return X, Y, concentration_ppm, combined_detection_prob
 
 
+def compute_ensemble_opportunity_map(
+    sources: List[dict],
+    wind_scenarios: List[dict],
+    grid_size: float = GRID_SIZE_M,
+    resolution: float = GRID_RESOLUTION_M,
+    receptor_height: float = RECEPTOR_HEIGHT_M,
+    mdl_ppm: float = SENSOR_MDL_PPM,
+    threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute a weighted-average opportunity map across multiple wind scenarios.
+
+    Each scenario is a dict with keys: 'direction', 'speed', 'stability_class', 'weight'.
+    The weights must sum to 1.0 (within tolerance).
+
+    Returns:
+        (X, Y, avg_concentration_ppm, avg_detection_prob) — all 2D arrays.
+    """
+    weights = [s["weight"] for s in wind_scenarios]
+    weight_sum = sum(weights)
+    if abs(weight_sum - 1.0) > 0.01:
+        raise ValueError(
+            f"Wind scenario weights must sum to 1.0, got {weight_sum:.4f}"
+        )
+
+    X, Y = create_grid(grid_size, resolution)
+    avg_conc = np.zeros_like(X, dtype=float)
+    avg_det = np.zeros_like(X, dtype=float)
+
+    for scenario in wind_scenarios:
+        _, _, conc_ppm, det_prob = compute_opportunity_map(
+            sources=sources,
+            wind_speed=scenario["speed"],
+            wind_direction_deg=scenario["direction"],
+            stability_class=scenario["stability_class"],
+            grid_size=grid_size,
+            resolution=resolution,
+            receptor_height=receptor_height,
+            mdl_ppm=mdl_ppm,
+            threshold_ppm=threshold_ppm,
+        )
+        w = scenario["weight"]
+        avg_conc += w * conc_ppm
+        avg_det += w * det_prob
+
+    return X, Y, avg_conc, avg_det
+
+
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
+def cached_ensemble_opportunity_map(
+    sources_key: Tuple[Tuple, ...],
+    scenarios_key: Tuple[Tuple, ...],
+    grid_size: float = GRID_SIZE_M,
+    resolution: float = GRID_RESOLUTION_M,
+    receptor_height: float = RECEPTOR_HEIGHT_M,
+    mdl_ppm: float = SENSOR_MDL_PPM,
+    threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Cached wrapper around compute_ensemble_opportunity_map.
+
+    Accepts hashable keys for Streamlit caching.
+    """
+    sources = [
+        {
+            "name": s[0],
+            "x": s[1],
+            "y": s[2],
+            "z": s[3],
+            "emission_rate": s[4],
+        }
+        for s in sources_key
+    ]
+    wind_scenarios = [
+        {
+            "direction": sc[0],
+            "speed": sc[1],
+            "stability_class": sc[2],
+            "weight": sc[3],
+        }
+        for sc in scenarios_key
+    ]
+    return compute_ensemble_opportunity_map(
+        sources=sources,
+        wind_scenarios=wind_scenarios,
+        grid_size=grid_size,
+        resolution=resolution,
+        receptor_height=receptor_height,
+        mdl_ppm=mdl_ppm,
+        threshold_ppm=threshold_ppm,
+    )
+
+
 @st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def cached_opportunity_map(
     sources_key: Tuple[Tuple, ...],

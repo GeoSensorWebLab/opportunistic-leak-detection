@@ -68,6 +68,13 @@ INSPECTION_DECAY_DAYS = 90.0  # Half-life for inspection benefit (days)
 # Spatial prior kernel: how far each source's prior influence extends
 PRIOR_KERNEL_RADIUS_M = 100.0  # Gaussian kernel radius for spatial prior
 
+# --- Bayesian Update ---
+FALSE_ALARM_RATE = 0.01           # P(detection | no leak) for Bayes denominator
+
+# --- Wind Ensemble ---
+DEFAULT_ENSEMBLE_SCENARIOS = 8    # Number of wind scenarios for ensemble averaging
+DEFAULT_WIND_SPREAD_DEG = 30.0    # Half-spread for directional fan (degrees)
+
 # --- Pasquill-Gifford Stability Classes ---
 # Coefficients for sigma_y and sigma_z: sigma = a * x^b
 # x in meters, sigma in meters

@@ -271,6 +271,7 @@ def create_single_map_figure(
     wind_speed: float,
     wind_direction_deg: float,
     facility_layout: Optional[Dict] = None,
+    colorbar_title: str = "P(detect)",
 ) -> go.Figure:
     """
     Create a full-width single-panel detection map with both paths,
@@ -287,7 +288,7 @@ def create_single_map_figure(
             colorscale="YlOrRd",
             zmin=0,
             zmax=1,
-            colorbar=dict(title="P(detect)"),
+            colorbar=dict(title=colorbar_title),
             name="Detection Prob",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P(detect): %{z:.3f}<extra></extra>",
         ),

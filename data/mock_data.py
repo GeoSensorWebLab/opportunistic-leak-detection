@@ -192,6 +192,74 @@ def get_road_following_path() -> np.ndarray:
     )
 
 
+def get_wind_distribution() -> List[dict]:
+    """
+    Return an 8-direction wind rose with equal weights.
+
+    Each scenario has a cardinal/intercardinal direction, moderate speed,
+    and neutral stability. Weights sum to 1.0.
+
+    Returns:
+        List of dicts with keys: 'direction', 'speed', 'stability_class', 'weight'.
+    """
+    directions = [0, 45, 90, 135, 180, 225, 270, 315]  # N, NE, E, SE, S, SW, W, NW
+    return [
+        {
+            "direction": d,
+            "speed": 3.0,
+            "stability_class": "D",
+            "weight": 1.0 / len(directions),
+        }
+        for d in directions
+    ]
+
+
+def get_wind_fan(
+    center_direction: float,
+    spread_deg: float = 30.0,
+    num_scenarios: int = 8,
+    speed: float = 3.0,
+    stability_class: str = "D",
+) -> List[dict]:
+    """
+    Generate a fan of wind directions around a center direction.
+
+    Creates equally spaced scenarios spanning center ± spread_deg,
+    with equal weights that sum to 1.0.
+
+    Args:
+        center_direction: Center wind direction in degrees (meteorological).
+        spread_deg: Half-spread in degrees (fan covers center ± spread_deg).
+        num_scenarios: Number of wind scenarios to generate.
+        speed: Wind speed for all scenarios (m/s).
+        stability_class: Pasquill-Gifford class for all scenarios.
+
+    Returns:
+        List of dicts with keys: 'direction', 'speed', 'stability_class', 'weight'.
+    """
+    if num_scenarios < 1:
+        raise ValueError("num_scenarios must be >= 1")
+
+    if num_scenarios == 1:
+        directions = [center_direction]
+    else:
+        directions = np.linspace(
+            center_direction - spread_deg,
+            center_direction + spread_deg,
+            num_scenarios,
+        )
+
+    return [
+        {
+            "direction": float(d % 360),
+            "speed": speed,
+            "stability_class": stability_class,
+            "weight": 1.0 / num_scenarios,
+        }
+        for d in directions
+    ]
+
+
 def get_wind_scenarios() -> List[dict]:
     """
     Return preset wind scenarios for quick testing.
