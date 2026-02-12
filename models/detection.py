@@ -9,13 +9,13 @@ around the sensor's detection threshold, modeling real sensor noise.
 """
 
 import numpy as np
-from config import DETECTION_THRESHOLD_PPM
+from config import DETECTION_THRESHOLD_PPM, DETECTION_STEEPNESS
 
 
 def detection_probability(
     concentration_ppm: np.ndarray,
     threshold_ppm: float = DETECTION_THRESHOLD_PPM,
-    steepness: float = 1.0,
+    steepness: float = DETECTION_STEEPNESS,
 ) -> np.ndarray:
     """
     Compute probability of detection at each grid point.

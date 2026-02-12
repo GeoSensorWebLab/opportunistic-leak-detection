@@ -13,7 +13,13 @@ import streamlit as st
 from typing import List, Optional, Tuple
 from scipy.spatial.distance import cdist
 
-from config import DEVIATION_EPSILON, MAX_DEVIATION_M, TOP_K_RECOMMENDATIONS
+from config import (
+    DEVIATION_EPSILON,
+    MAX_DEVIATION_M,
+    TOP_K_RECOMMENDATIONS,
+    MIN_WAYPOINT_SEPARATION_M,
+    CLUSTER_FRACTION,
+)
 
 
 def compute_path_deviation(
@@ -121,7 +127,7 @@ def recommend_waypoints(
     detection_prob: np.ndarray,
     concentration_ppm: np.ndarray,
     top_k: int = TOP_K_RECOMMENDATIONS,
-    min_separation: float = 50.0,
+    min_separation: float = MIN_WAYPOINT_SEPARATION_M,
 ) -> List[dict]:
     """
     Extract the top-K recommended waypoints from the score map.
@@ -329,7 +335,7 @@ def build_optimized_path(
         np.linalg.norm(baseline_path[i + 1] - baseline_path[i])
         for i in range(n_base - 1)
     )
-    merge_thresh = total_len * 0.08  # within 8% of total path → same detour
+    merge_thresh = total_len * CLUSTER_FRACTION
 
     clusters: List[List[dict]] = [[projections[0]]]
     for p in projections[1:]:

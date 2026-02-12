@@ -11,7 +11,7 @@ Convention:
 """
 
 import numpy as np
-from config import DISPERSION_COEFFICIENTS
+from config import DISPERSION_COEFFICIENTS, AIR_MOLAR_MASS, METHANE_MOLAR_MASS, AIR_DENSITY
 
 
 def _get_dispersion_coeffs(stability_class: str) -> dict:
@@ -146,9 +146,5 @@ def concentration_to_ppm(concentration_kg_m3: np.ndarray) -> np.ndarray:
     Returns:
         Concentration in ppm (volume).
     """
-    M_air = 28.97   # g/mol (dry air)
-    M_CH4 = 16.04   # g/mol
-    rho_air = 1.225  # kg/m^3
-
-    ppm = (concentration_kg_m3 / rho_air) * (M_air / M_CH4) * 1e6
+    ppm = (concentration_kg_m3 / AIR_DENSITY) * (AIR_MOLAR_MASS / METHANE_MOLAR_MASS) * 1e6
     return ppm

@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Dict, List, Optional, Tuple
 
+from config import COMPASS_POSITION
+
 
 def _rect_coords(element: dict) -> Tuple[list, list]:
     """Return (xs, ys) for a closed rectangle given cx, cy, width, height."""
@@ -324,7 +326,7 @@ def _add_compass_rose(
     yref = f"y{col if col > 1 else ''}"
 
     # Centre of compass rose in data coords (upper-left corner of plot)
-    cx, cy = -400, 400
+    cx, cy = COMPASS_POSITION
     outer_r = 55
 
     # Outer ring
