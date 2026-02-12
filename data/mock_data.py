@@ -79,11 +79,75 @@ def get_leak_sources() -> List[dict]:
     ]
 
 
+def get_inspection_targets() -> List[dict]:
+    """
+    Return the 5 mandatory equipment inspection stops.
+
+    These are the locations the field worker must visit regardless of
+    opportunistic methane detection. Order reflects a logical south-to-north
+    walk across the facility.
+
+    Returns:
+        List of dicts with keys: 'name', 'x', 'y'.
+    """
+    return [
+        {"name": "Storage Tank D",       "x": -110.0, "y": -270.0},
+        {"name": "Compressor Station B", "x":   75.0, "y": -140.0},
+        {"name": "Valve Cluster E",      "x":  270.0, "y":  -60.0},
+        {"name": "Pipeline Junction C",  "x":  280.0, "y":  -30.0},
+        {"name": "Wellhead A",           "x": -260.0, "y":  130.0},
+    ]
+
+
 def get_baseline_path() -> np.ndarray:
     """
-    Return the worker's planned baseline path as a series of waypoints.
+    Return a free-walking baseline path between inspection targets.
 
-    Simulates a routine inspection route across the site.
+    Workers carry handheld methane detectors and walk freely across
+    facility grounds — they are not constrained to roads. This path
+    represents direct point-to-point walking between mandatory
+    equipment inspection stops with midpoints on long segments
+    for deviation accuracy.
+
+    Route: South Gate → Tank D → Compressor B → Valve E →
+           Pipeline C → Wellhead A → North Gate
+
+    Returns:
+        (N, 2) array of [x, y] coordinates in meters.
+        Total distance ~1,600 m.
+    """
+    return np.array(
+        [
+            # ── South gate entry ──
+            [0.0, -380.0],          # South gate
+            # ── Walk to Storage Tank D ──
+            [-55.0, -325.0],        # Midpoint: gate → tank
+            [-110.0, -270.0],       # Storage Tank D (inspection stop)
+            # ── Walk to Compressor Station B ──
+            [-18.0, -205.0],        # Midpoint: tank → compressor
+            [75.0, -140.0],         # Compressor Station B (inspection stop)
+            # ── Walk to Valve Cluster E ──
+            [172.0, -100.0],        # Midpoint: compressor → valve
+            [270.0, -60.0],         # Valve Cluster E (inspection stop)
+            # ── Walk to Pipeline Junction C ──
+            [280.0, -30.0],         # Pipeline Junction C (inspection stop, nearby)
+            # ── Walk to Wellhead A ──
+            [10.0, 50.0],           # Midpoint: pipeline → wellhead
+            [-260.0, 130.0],        # Wellhead A (inspection stop)
+            # ── Walk to North gate ──
+            [-130.0, 190.0],        # Midpoint: wellhead → north gate
+            [0.0, 250.0],           # North gate — route complete
+        ]
+    )
+
+
+def get_road_following_path() -> np.ndarray:
+    """
+    Return the legacy road-following baseline path (27 waypoints).
+
+    This path rigidly follows facility roads with out-and-back detours.
+    Preserved for comparison with the free-walking path.
+    Total distance ~2,100 m.
 
     Returns:
         (N, 2) array of [x, y] coordinates in meters.

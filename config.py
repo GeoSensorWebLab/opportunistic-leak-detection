@@ -31,6 +31,11 @@ CLUSTER_FRACTION = 0.08        # Fraction of total path length for waypoint clus
 # --- Cache ---
 CACHE_MAX_ENTRIES = 32         # Max entries for opportunity map cache
 
+# --- Route / Walking ---
+WALKING_SPEED_MPS = 1.2          # Typical field walking speed (~4.3 km/h)
+PATH_ARROW_INTERVAL_M = 80       # Spacing for direction arrows along paths
+DETOUR_TOLERANCE_M = 5.0         # Distance threshold for identifying detour segments
+
 # --- Visualization ---
 COMPASS_POSITION = (-400, 400)  # (x, y) data-coord position of compass rose on plots
 

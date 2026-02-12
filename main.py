@@ -23,8 +23,14 @@ from optimization.tasking import (
     recommend_waypoints,
     build_optimized_path,
 )
+from optimization.metrics import compute_route_metrics, find_nearest_source
 from models.prior import compute_all_priors, create_spatial_prior
-from visualization.plots import create_site_figure, create_score_profile
+from visualization.plots import (
+    create_site_figure,
+    create_single_map_figure,
+    create_concentration_figure,
+    create_score_profile,
+)
 from visualization.compass_widget import compass_html
 from config import (
     DEFAULT_WIND_SPEED,
@@ -233,27 +239,78 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
 
     optimized_path = build_optimized_path(baseline_path, recommendations)
 
-# ── Visualization ────────────────────────────────────────────────────────────
+# ── Route Metrics ────────────────────────────────────────────────────────────
 
-fig_site = create_site_figure(
-    grid_x=X,
-    grid_y=Y,
-    concentration_ppm=concentration_ppm,
-    detection_prob=detection_prob,
-    sources=sources,
-    baseline_path=baseline_path,
-    optimized_path=optimized_path,
-    recommendations=recommendations,
-    wind_speed=wind_speed,
-    wind_direction_deg=wind_direction,
-    facility_layout=facility_layout,
+metrics = compute_route_metrics(baseline_path, optimized_path, recommendations)
+
+# ── Summary Metrics Banner ───────────────────────────────────────────────────
+
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Baseline Distance", f"{metrics['baseline_distance_m']:.0f} m")
+m2.metric("Optimized Distance", f"{metrics['optimized_distance_m']:.0f} m")
+m3.metric(
+    "Time Impact",
+    f"+{metrics['time_impact_min']:.1f} min",
+    delta=f"+{metrics['added_detour_m']:.0f} m",
+    delta_color="off",
 )
+m4.metric("Detour Points", f"{metrics['num_detour_points']}")
+m5.metric("Avg Detection Prob", f"{metrics['avg_detection_prob']:.1%}")
 
-st.plotly_chart(fig_site, width="stretch")
+# ── Tabbed Visualization ────────────────────────────────────────────────────
+
+tab_detect, tab_conc, tab_dual = st.tabs([
+    "Detection Map",
+    "Concentration Map",
+    "Side-by-Side",
+])
+
+with tab_detect:
+    fig_detect = create_single_map_figure(
+        grid_x=X,
+        grid_y=Y,
+        detection_prob=detection_prob,
+        sources=sources,
+        baseline_path=baseline_path,
+        optimized_path=optimized_path,
+        recommendations=recommendations,
+        wind_speed=wind_speed,
+        wind_direction_deg=wind_direction,
+        facility_layout=facility_layout,
+    )
+    st.plotly_chart(fig_detect, use_container_width=True)
+
+with tab_conc:
+    fig_conc = create_concentration_figure(
+        grid_x=X,
+        grid_y=Y,
+        concentration_ppm=concentration_ppm,
+        sources=sources,
+        wind_speed=wind_speed,
+        wind_direction_deg=wind_direction,
+        facility_layout=facility_layout,
+    )
+    st.plotly_chart(fig_conc, use_container_width=True)
+
+with tab_dual:
+    fig_site = create_site_figure(
+        grid_x=X,
+        grid_y=Y,
+        concentration_ppm=concentration_ppm,
+        detection_prob=detection_prob,
+        sources=sources,
+        baseline_path=baseline_path,
+        optimized_path=optimized_path,
+        recommendations=recommendations,
+        wind_speed=wind_speed,
+        wind_direction_deg=wind_direction,
+        facility_layout=facility_layout,
+    )
+    st.plotly_chart(fig_site, use_container_width=True)
 
 # Score bar chart
 fig_scores = create_score_profile(recommendations)
-st.plotly_chart(fig_scores, width="stretch")
+st.plotly_chart(fig_scores, use_container_width=True)
 
 # ── Recommendations Table ────────────────────────────────────────────────────
 
@@ -261,11 +318,15 @@ st.subheader("Recommended Waypoints")
 
 if recommendations:
     for i, rec in enumerate(recommendations):
-        col1, col2, col3, col4 = st.columns(4)
+        nearest = find_nearest_source(rec, sources)
+        col1, col2, col3, col4, col5 = st.columns(5)
         col1.metric(f"#{i+1} Location", f"({rec['x']:.0f}, {rec['y']:.0f}) m")
-        col2.metric("Detection Prob.", f"{rec['detection_prob']:.1%}")
-        col3.metric("Concentration", f"{rec['concentration_ppm']:.1f} ppm")
-        col4.metric("Tasking Score", f"{rec['score']:.4f}")
+        col2.metric("Nearest Equipment", nearest or "—")
+        col3.metric("Detection Prob.", f"{rec['detection_prob']:.1%}")
+        col4.metric("Concentration", f"{rec['concentration_ppm']:.1f} ppm")
+        col5.metric("Tasking Score", f"{rec['score']:.4f}")
+        if i < len(recommendations) - 1:
+            st.divider()
 else:
     st.info(
         "No high-value waypoints found near the baseline path under current conditions. "
