@@ -16,13 +16,14 @@ import numpy as np
 
 from data.mock_data import get_leak_sources, get_baseline_path, get_wind_scenarios
 from data.facility_layout import get_facility_layout
-from optimization.opportunity_map import cached_opportunity_map
+from optimization.opportunity_map import cached_opportunity_map, create_grid
 from optimization.tasking import (
     compute_tasking_scores,
     cached_path_deviation,
     recommend_waypoints,
     build_optimized_path,
 )
+from models.prior import compute_all_priors, create_spatial_prior
 from visualization.plots import create_site_figure, create_score_profile
 from visualization.compass_widget import compass_html
 from config import (
@@ -47,7 +48,7 @@ st.set_page_config(
 st.title("Methane Leak Opportunistic Tasking System")
 st.markdown(
     "Recommends optimal locations for a field worker to detect methane leaks "
-    "based on wind conditions and their existing route."
+    "based on wind conditions, equipment risk profiles, and their existing route."
 )
 
 # ── Sidebar Controls ─────────────────────────────────────────────────────────
@@ -121,11 +122,32 @@ grid_resolution = st.sidebar.select_slider(
     value=GRID_RESOLUTION_M,
 )
 
+# ── Prior Model Settings ────────────────────────────────────────────────────
+
+st.sidebar.header("Prior Risk Model")
+
+use_prior = st.sidebar.checkbox(
+    "Enable risk-based prior weighting",
+    value=True,
+    help="When enabled, recommendations are biased toward equipment with "
+         "higher leak probability based on age, type, production rate, "
+         "and inspection recency.",
+)
+
 # ── Data ─────────────────────────────────────────────────────────────────────
 
 sources = get_leak_sources()
 baseline_path = get_baseline_path()
 facility_layout = get_facility_layout()
+
+# ── Prior Computation ───────────────────────────────────────────────────────
+
+prior_probs = compute_all_priors(sources)
+spatial_prior = None
+
+if use_prior:
+    X_prior, Y_prior = create_grid(GRID_SIZE_M, grid_resolution)
+    spatial_prior = create_spatial_prior(X_prior, Y_prior, sources, prior_probs)
 
 # ── Cached Computation ───────────────────────────────────────────────────────
 
@@ -162,6 +184,7 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
         epsilon=DEVIATION_EPSILON,
         max_deviation=float(max_deviation),
         precomputed_deviation=deviation,
+        prior_weight=spatial_prior,
     )
 
     recommendations = recommend_waypoints(
@@ -214,11 +237,44 @@ else:
         "Try adjusting wind direction or increasing max deviation."
     )
 
+# ── Prior Risk Summary ──────────────────────────────────────────────────────
+
+with st.expander("Equipment Risk Assessment (Prior Model)"):
+    st.markdown(
+        "Prior leak probabilities are computed from equipment attributes: "
+        "**type** (compressor > valve > wellhead), **age** (older = higher risk), "
+        "**production rate** (higher throughput = more stress), and "
+        "**inspection recency** (longer since inspection = more uncertainty)."
+    )
+    st.markdown("")
+
+    # Sort sources by prior probability (highest risk first)
+    ranked = sorted(
+        zip(sources, prior_probs), key=lambda x: x[1], reverse=True
+    )
+
+    for src, p in ranked:
+        risk_level = "HIGH" if p > 0.3 else "MEDIUM" if p > 0.15 else "LOW"
+        risk_color = "red" if p > 0.3 else "orange" if p > 0.15 else "green"
+        st.markdown(
+            f"- **{src['name']}** — Prior: **{p:.1%}** "
+            f":{risk_color}_circle: {risk_level} | "
+            f"Type: {src.get('equipment_type', 'unknown')}, "
+            f"Age: {src.get('age_years', '?')} yr, "
+            f"Production: {src.get('production_rate_mcfd', 0):.0f} mcf/d, "
+            f"Last inspected: {src.get('last_inspection_days', '?')} days ago"
+        )
+
 # ── Info Panel ───────────────────────────────────────────────────────────────
 
 with st.expander("About the Model"):
+    scoring_formula = (
+        "`Score = Prior(x,y) * P(detection) / (PathDeviation + epsilon)`"
+        if use_prior
+        else "`Score = P(detection) / (PathDeviation + epsilon)`"
+    )
     st.markdown(
-        """
+        f"""
         **Gaussian Plume Model** — Standard atmospheric dispersion model for
         continuous point sources. Uses Pasquill-Gifford stability classes (A-F)
         to determine lateral and vertical dispersion coefficients.
@@ -226,7 +282,12 @@ with st.expander("About the Model"):
         **Detection Probability** — Sigmoid function centered at the sensor's
         detection threshold (5 ppm by default). Accounts for sensor noise.
 
-        **Tasking Score** — `Score = P(detection) / (PathDeviation + epsilon)`
+        **Prior Risk Model** — Computes per-source leak probability from
+        equipment type, age, production rate, and inspection recency. Projects
+        onto a spatial grid using Gaussian kernels (Stage 1 of Bayesian
+        architecture).
+
+        **Tasking Score** — {scoring_formula}
         where `epsilon` prevents division-by-zero for on-path locations.
 
         **Optimized Path** — Inserts high-score waypoints as detours into the

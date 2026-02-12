@@ -167,6 +167,43 @@ class TestRecommendWaypoints:
         assert "concentration_ppm" in rec
 
 
+class TestPriorWeightedScoring:
+    """Tests for prior-weighted tasking scores."""
+
+    def test_prior_weight_increases_high_prior_scores(self, small_grid, simple_path):
+        """Scores near high-prior locations should increase with prior weighting."""
+        X, Y = small_grid
+        det_prob = np.ones_like(X) * 0.5  # Uniform detection
+
+        # No prior
+        scores_no_prior = compute_tasking_scores(
+            X, Y, det_prob, simple_path, max_deviation=200.0,
+        )
+
+        # With prior that peaks at (0, 0)
+        prior = np.exp(-0.5 * (X ** 2 + Y ** 2) / 50 ** 2)
+        scores_with_prior = compute_tasking_scores(
+            X, Y, det_prob, simple_path, max_deviation=200.0,
+            prior_weight=prior,
+        )
+
+        # At center (0,0) where prior is highest, weighted score should be highest
+        center = X.shape[0] // 2
+        assert scores_with_prior[center, center] > 0
+        # At edges where prior is ~0, weighted score should be lower
+        assert scores_with_prior[0, 0] < scores_no_prior[0, 0]
+
+    def test_none_prior_gives_original_behavior(self, small_grid, simple_path):
+        """prior_weight=None should produce same results as before."""
+        X, Y = small_grid
+        det_prob = np.random.rand(*X.shape)
+        scores_default = compute_tasking_scores(X, Y, det_prob, simple_path)
+        scores_none = compute_tasking_scores(
+            X, Y, det_prob, simple_path, prior_weight=None,
+        )
+        np.testing.assert_array_equal(scores_default, scores_none)
+
+
 class TestProjectOntoPath:
     """Tests for point-to-path projection."""
 
