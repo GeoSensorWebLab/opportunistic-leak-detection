@@ -11,7 +11,14 @@ from typing import List, Tuple
 
 from models.gaussian_plume import gaussian_plume, concentration_to_ppm
 from models.detection import detection_probability
-from config import GRID_SIZE_M, GRID_RESOLUTION_M, RECEPTOR_HEIGHT_M, CACHE_MAX_ENTRIES
+from config import (
+    GRID_SIZE_M,
+    GRID_RESOLUTION_M,
+    RECEPTOR_HEIGHT_M,
+    CACHE_MAX_ENTRIES,
+    SENSOR_MDL_PPM,
+    DETECTION_THRESHOLD_PPM,
+)
 
 
 def create_grid(
@@ -42,6 +49,8 @@ def compute_opportunity_map(
     grid_size: float = GRID_SIZE_M,
     resolution: float = GRID_RESOLUTION_M,
     receptor_height: float = RECEPTOR_HEIGHT_M,
+    mdl_ppm: float = SENSOR_MDL_PPM,
+    threshold_ppm: float = DETECTION_THRESHOLD_PPM,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate a combined detection-probability heat map from all leak sources.
@@ -60,6 +69,8 @@ def compute_opportunity_map(
         grid_size: Site extent in meters.
         resolution: Grid cell size in meters.
         receptor_height: Sensor height above ground (meters).
+        mdl_ppm: Sensor Minimum Detection Limit in ppm.
+        threshold_ppm: Sigmoid midpoint for detection probability.
 
     Returns:
         (X, Y, concentration_ppm, detection_prob) — all 2D arrays.
@@ -87,7 +98,9 @@ def compute_opportunity_map(
 
     # Convert summed concentration to ppm, then derive detection probability
     concentration_ppm = concentration_to_ppm(total_conc)
-    combined_detection_prob = detection_probability(concentration_ppm)
+    combined_detection_prob = detection_probability(
+        concentration_ppm, threshold_ppm=threshold_ppm, mdl_ppm=mdl_ppm,
+    )
 
     return X, Y, concentration_ppm, combined_detection_prob
 
@@ -101,6 +114,8 @@ def cached_opportunity_map(
     grid_size: float = GRID_SIZE_M,
     resolution: float = GRID_RESOLUTION_M,
     receptor_height: float = RECEPTOR_HEIGHT_M,
+    mdl_ppm: float = SENSOR_MDL_PPM,
+    threshold_ppm: float = DETECTION_THRESHOLD_PPM,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Cached wrapper around compute_opportunity_map.
@@ -126,4 +141,6 @@ def cached_opportunity_map(
         grid_size=grid_size,
         resolution=resolution,
         receptor_height=receptor_height,
+        mdl_ppm=mdl_ppm,
+        threshold_ppm=threshold_ppm,
     )

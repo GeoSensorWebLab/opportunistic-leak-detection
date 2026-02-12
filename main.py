@@ -35,6 +35,8 @@ from config import (
     DEVIATION_EPSILON,
     MAX_DEVIATION_M,
     TOP_K_RECOMMENDATIONS,
+    SENSOR_MDL_PPM,
+    DETECTION_THRESHOLD_PPM,
 )
 
 # ── Page Config ──────────────────────────────────────────────────────────────
@@ -122,6 +124,37 @@ grid_resolution = st.sidebar.select_slider(
     value=GRID_RESOLUTION_M,
 )
 
+# ── Sensor Settings ─────────────────────────────────────────────────────────
+
+st.sidebar.header("Sensor Characteristics")
+
+sensor_mdl = st.sidebar.slider(
+    "Minimum Detection Limit (ppm)",
+    min_value=0.0,
+    max_value=10.0,
+    value=SENSOR_MDL_PPM,
+    step=0.5,
+    help="Hard noise floor of the sensor. Concentrations below this value "
+         "are physically undetectable (P = 0). Typical handheld CH4 detectors: "
+         "0.5–2 ppm.",
+)
+
+sensor_threshold = st.sidebar.slider(
+    "Detection Threshold (ppm)",
+    min_value=1.0,
+    max_value=50.0,
+    value=DETECTION_THRESHOLD_PPM,
+    step=0.5,
+    help="Concentration at which probability of detection is 50%%. "
+         "The sigmoid transition is centered here.",
+)
+
+if sensor_mdl >= sensor_threshold:
+    st.sidebar.warning(
+        "MDL should be below the detection threshold. "
+        "Current settings may produce unexpected results."
+    )
+
 # ── Prior Model Settings ────────────────────────────────────────────────────
 
 st.sidebar.header("Prior Risk Model")
@@ -167,6 +200,8 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
         stability_class=stability_class,
         grid_size=GRID_SIZE_M,
         resolution=grid_resolution,
+        mdl_ppm=sensor_mdl,
+        threshold_ppm=sensor_threshold,
     )
 
     # Cached path deviation (independent of wind — computed once)
@@ -214,11 +249,11 @@ fig_site = create_site_figure(
     facility_layout=facility_layout,
 )
 
-st.plotly_chart(fig_site, use_container_width=True)
+st.plotly_chart(fig_site, width="stretch")
 
 # Score bar chart
 fig_scores = create_score_profile(recommendations)
-st.plotly_chart(fig_scores, use_container_width=True)
+st.plotly_chart(fig_scores, width="stretch")
 
 # ── Recommendations Table ────────────────────────────────────────────────────
 
@@ -280,7 +315,9 @@ with st.expander("About the Model"):
         to determine lateral and vertical dispersion coefficients.
 
         **Detection Probability** — Sigmoid function centered at the sensor's
-        detection threshold (5 ppm by default). Accounts for sensor noise.
+        detection threshold ({sensor_threshold} ppm), with a hard Minimum
+        Detection Limit (MDL = {sensor_mdl} ppm) below which P = 0.
+        Accounts for sensor noise floor and response characteristics.
 
         **Prior Risk Model** — Computes per-source leak probability from
         equipment type, age, production rate, and inspection recency. Projects

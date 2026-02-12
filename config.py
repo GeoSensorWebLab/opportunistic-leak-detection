@@ -14,7 +14,8 @@ DEFAULT_WIND_DIRECTION = 270   # Meteorological convention: direction wind comes
 DEFAULT_STABILITY_CLASS = "D"  # Neutral stability
 
 # --- Detection ---
-DETECTION_THRESHOLD_PPM = 5.0  # Minimum concentration for sensor to register (ppm)
+SENSOR_MDL_PPM = 1.0           # Minimum Detection Limit — hard floor below which P(detect) = 0
+DETECTION_THRESHOLD_PPM = 5.0  # Sigmoid midpoint — concentration at which P(detect) = 50%
 DETECTION_STEEPNESS = 1.0      # Sigmoid steepness parameter (higher = sharper transition)
 METHANE_MOLAR_MASS = 16.04     # g/mol
 AIR_MOLAR_MASS = 28.97         # g/mol (dry air average)
