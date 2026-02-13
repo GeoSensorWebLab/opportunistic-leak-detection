@@ -9,7 +9,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from typing import Dict, List, Optional, Tuple
 
-from config import COMPASS_POSITION, PATH_ARROW_INTERVAL_M, DETOUR_TOLERANCE_M
+import streamlit as st
+
+from config import COMPASS_POSITION, PATH_ARROW_INTERVAL_M, DETOUR_TOLERANCE_M, CACHE_MAX_ENTRIES
 
 
 def _rect_coords(element: dict) -> Tuple[list, list]:
@@ -260,6 +262,11 @@ def _add_detour_highlights(
 
 # ── Single-panel map (primary view) ────────────────────────────────────────
 
+# Worker colors for multi-worker mode
+_WORKER_COLORS = ["#00b4d8", "#ff6b6b", "#51cf66", "#fcc419", "#cc5de8"]
+
+
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def create_single_map_figure(
     grid_x: np.ndarray,
     grid_y: np.ndarray,
@@ -272,10 +279,14 @@ def create_single_map_figure(
     wind_direction_deg: float,
     facility_layout: Optional[Dict] = None,
     colorbar_title: str = "P(detect)",
+    worker_routes: Optional[List] = None,
 ) -> go.Figure:
     """
     Create a full-width single-panel detection map with both paths,
     direction arrows, start/end markers, and detour highlights.
+
+    When worker_routes is provided, renders each worker's optimized
+    path in a distinct color instead of a single white path.
     """
     fig = make_subplots(rows=1, cols=1)
 
@@ -288,7 +299,7 @@ def create_single_map_figure(
             colorscale="YlOrRd",
             zmin=0,
             zmax=1,
-            colorbar=dict(title=colorbar_title),
+            colorbar=dict(title=colorbar_title, thickness=15, len=0.75),
             name="Detection Prob",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P(detect): %{z:.3f}<extra></extra>",
         ),
@@ -319,44 +330,77 @@ def create_single_map_figure(
         row=1, col=1,
     )
 
-    # Baseline path
-    fig.add_trace(
-        go.Scatter(
-            x=baseline_path[:, 0],
-            y=baseline_path[:, 1],
-            mode="lines+markers",
-            line=dict(color="cyan", width=3, dash="dash"),
-            marker=dict(size=4, color="cyan"),
-            name="Baseline Path",
-            hovertemplate="Baseline<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
-        ),
-        row=1, col=1,
-    )
+    # Multi-worker mode: render per-worker colored paths
+    if worker_routes and len(worker_routes) > 1:
+        # Baseline path (shared, thin dash)
+        fig.add_trace(
+            go.Scatter(
+                x=baseline_path[:, 0],
+                y=baseline_path[:, 1],
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.3)", width=2, dash="dash"),
+                name="Baseline",
+                hovertemplate="Baseline<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            ),
+            row=1, col=1,
+        )
 
-    # Optimized path
-    fig.add_trace(
-        go.Scatter(
-            x=optimized_path[:, 0],
-            y=optimized_path[:, 1],
-            mode="lines+markers",
-            line=dict(color="white", width=3),
-            marker=dict(size=4, color="white"),
-            name="Optimized Path",
-            hovertemplate="Optimized<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
-        ),
-        row=1, col=1,
-    )
+        for route in worker_routes:
+            if route.optimized_path is None or len(route.optimized_path) < 2:
+                continue
+            wcolor = _WORKER_COLORS[route.worker_id % len(_WORKER_COLORS)]
+            wpath = route.optimized_path
 
-    # Detour highlights
-    detour_segs = _identify_detour_segments(baseline_path, optimized_path)
-    _add_detour_highlights(fig, optimized_path, detour_segs, row=1, col=1)
+            fig.add_trace(
+                go.Scatter(
+                    x=wpath[:, 0],
+                    y=wpath[:, 1],
+                    mode="lines+markers",
+                    line=dict(color=wcolor, width=3),
+                    marker=dict(size=4, color=wcolor),
+                    name=f"Worker {route.worker_id + 1}",
+                    hovertemplate=f"Worker {route.worker_id + 1}<br>"
+                                  "(%{x:.0f}, %{y:.0f})<extra></extra>",
+                ),
+                row=1, col=1,
+            )
+            _add_path_arrows(fig, wpath, wcolor, row=1, col=1)
+            _add_start_end_markers(fig, wpath, row=1, col=1)
+    else:
+        # Single-worker mode: original rendering
+        fig.add_trace(
+            go.Scatter(
+                x=baseline_path[:, 0],
+                y=baseline_path[:, 1],
+                mode="lines+markers",
+                line=dict(color="cyan", width=3, dash="dash"),
+                marker=dict(size=4, color="cyan"),
+                name="Baseline Path",
+                hovertemplate="Baseline<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            ),
+            row=1, col=1,
+        )
 
-    # Direction arrows on both paths
-    _add_path_arrows(fig, baseline_path, "cyan", row=1, col=1)
-    _add_path_arrows(fig, optimized_path, "white", row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=optimized_path[:, 0],
+                y=optimized_path[:, 1],
+                mode="lines+markers",
+                line=dict(color="white", width=3),
+                marker=dict(size=4, color="white"),
+                name="Optimized Path",
+                hovertemplate="Optimized<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            ),
+            row=1, col=1,
+        )
 
-    # Start / End markers
-    _add_start_end_markers(fig, optimized_path, row=1, col=1)
+        detour_segs = _identify_detour_segments(baseline_path, optimized_path)
+        _add_detour_highlights(fig, optimized_path, detour_segs, row=1, col=1)
+
+        _add_path_arrows(fig, baseline_path, "cyan", row=1, col=1)
+        _add_path_arrows(fig, optimized_path, "white", row=1, col=1)
+
+        _add_start_end_markers(fig, optimized_path, row=1, col=1)
 
     # Recommended waypoints
     if recommendations:
@@ -391,8 +435,9 @@ def create_single_map_figure(
     _add_compass_rose(fig, wind_speed, wind_direction_deg, row=1, col=1)
 
     fig.update_layout(
-        height=700,
+        height=650,
         template="plotly_dark",
+        font=dict(family="sans-serif"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -400,17 +445,18 @@ def create_single_map_figure(
             xanchor="center",
             x=0.5,
         ),
-        margin=dict(l=60, r=60, t=40, b=80),
+        margin=dict(l=50, r=50, t=35, b=70),
     )
 
-    fig.update_xaxes(title_text="East (m)")
-    fig.update_yaxes(title_text="North (m)")
+    fig.update_xaxes(title_text="East (m)", title_font_size=11)
+    fig.update_yaxes(title_text="North (m)", title_font_size=11)
 
     return fig
 
 
 # ── Concentration-only map ──────────────────────────────────────────────────
 
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def create_concentration_figure(
     grid_x: np.ndarray,
     grid_y: np.ndarray,
@@ -432,7 +478,7 @@ def create_concentration_figure(
             z=conc_display,
             colorscale="Hot",
             reversescale=True,
-            colorbar=dict(title="log10(ppm)"),
+            colorbar=dict(title="log10(ppm)", thickness=15, len=0.75),
             name="Concentration",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>log10(ppm): %{z:.2f}<extra></extra>",
         ),
@@ -464,8 +510,9 @@ def create_concentration_figure(
     _add_compass_rose(fig, wind_speed, wind_direction_deg, row=1, col=1)
 
     fig.update_layout(
-        height=700,
+        height=650,
         template="plotly_dark",
+        font=dict(family="sans-serif"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -473,17 +520,18 @@ def create_concentration_figure(
             xanchor="center",
             x=0.5,
         ),
-        margin=dict(l=60, r=60, t=40, b=80),
+        margin=dict(l=50, r=50, t=35, b=70),
     )
 
-    fig.update_xaxes(title_text="East (m)")
-    fig.update_yaxes(title_text="North (m)")
+    fig.update_xaxes(title_text="East (m)", title_font_size=11)
+    fig.update_yaxes(title_text="North (m)", title_font_size=11)
 
     return fig
 
 
 # ── Side-by-side dual panel (preserved) ─────────────────────────────────────
 
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def create_site_figure(
     grid_x: np.ndarray,
     grid_y: np.ndarray,
@@ -524,7 +572,7 @@ def create_site_figure(
             z=conc_display,
             colorscale="Hot",
             reversescale=True,
-            colorbar=dict(title="log10(ppm)", x=0.42),
+            colorbar=dict(title="log10(ppm)", x=0.42, thickness=15, len=0.75),
             name="Concentration",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>log10(ppm): %{z:.2f}<extra></extra>",
         ),
@@ -568,7 +616,7 @@ def create_site_figure(
             colorscale="YlOrRd",
             zmin=0,
             zmax=1,
-            colorbar=dict(title="P(detect)", x=1.0),
+            colorbar=dict(title="P(detect)", x=1.0, thickness=15, len=0.75),
             name="Detection Prob",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P(detect): %{z:.3f}<extra></extra>",
         ),
@@ -672,8 +720,9 @@ def create_site_figure(
 
     # Layout
     fig.update_layout(
-        height=700,
+        height=650,
         template="plotly_dark",
+        font=dict(family="sans-serif"),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -681,13 +730,13 @@ def create_site_figure(
             xanchor="center",
             x=0.5,
         ),
-        margin=dict(l=60, r=60, t=60, b=80),
+        margin=dict(l=50, r=50, t=50, b=70),
     )
 
-    fig.update_xaxes(title_text="East (m)", row=1, col=1)
-    fig.update_yaxes(title_text="North (m)", row=1, col=1)
-    fig.update_xaxes(title_text="East (m)", row=1, col=2)
-    fig.update_yaxes(title_text="North (m)", row=1, col=2)
+    fig.update_xaxes(title_text="East (m)", title_font_size=11, row=1, col=1)
+    fig.update_yaxes(title_text="North (m)", title_font_size=11, row=1, col=1)
+    fig.update_xaxes(title_text="East (m)", title_font_size=11, row=1, col=2)
+    fig.update_yaxes(title_text="North (m)", title_font_size=11, row=1, col=2)
 
     return fig
 
@@ -773,6 +822,209 @@ def _add_compass_rose(
     )
 
 
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
+def create_entropy_figure(
+    grid_x: np.ndarray,
+    grid_y: np.ndarray,
+    belief: np.ndarray,
+    sources: List[dict],
+    wind_speed: float,
+    wind_direction_deg: float,
+    facility_layout: Optional[Dict] = None,
+) -> go.Figure:
+    """Create a single-panel entropy heatmap from a belief map.
+
+    Uses per-cell binary Shannon entropy H(p) = -p*log2(p) - (1-p)*log2(1-p).
+    """
+    from optimization.information_gain import compute_cell_entropy
+
+    entropy = compute_cell_entropy(belief)
+
+    fig = make_subplots(rows=1, cols=1)
+
+    fig.add_trace(
+        go.Heatmap(
+            x=grid_x[0, :],
+            y=grid_y[:, 0],
+            z=entropy,
+            colorscale="Viridis",
+            zmin=0,
+            zmax=1,
+            colorbar=dict(title="Entropy (bits)", thickness=15, len=0.75),
+            name="Entropy",
+            hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>H: %{z:.3f} bits<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    if facility_layout:
+        _add_facility_layout(fig, facility_layout, row=1, col=1, show_legend=True)
+
+    src_x = [s["x"] for s in sources]
+    src_y = [s["y"] for s in sources]
+    src_names = [s["name"] for s in sources]
+    fig.add_trace(
+        go.Scatter(
+            x=src_x, y=src_y,
+            mode="markers+text",
+            marker=dict(size=12, color="lime", symbol="diamond",
+                        line=dict(width=1, color="black")),
+            text=src_names,
+            textposition="top center",
+            textfont=dict(size=9, color="white"),
+            name="Leak Sources",
+            hovertemplate="%{text}<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    _add_compass_rose(fig, wind_speed, wind_direction_deg, row=1, col=1)
+
+    fig.update_layout(
+        height=650,
+        template="plotly_dark",
+        font=dict(family="sans-serif"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.12, xanchor="center", x=0.5),
+        margin=dict(l=50, r=50, t=35, b=70),
+    )
+    fig.update_xaxes(title_text="East (m)", title_font_size=11)
+    fig.update_yaxes(title_text="North (m)", title_font_size=11)
+
+    return fig
+
+
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
+def create_prior_posterior_figure(
+    grid_x: np.ndarray,
+    grid_y: np.ndarray,
+    prior: np.ndarray,
+    posterior: np.ndarray,
+    sources: List[dict],
+    wind_speed: float,
+    wind_direction_deg: float,
+    facility_layout: Optional[Dict] = None,
+) -> go.Figure:
+    """Create a side-by-side prior vs posterior belief map."""
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Prior P(leak)", "Posterior P(leak)"),
+        horizontal_spacing=0.12,
+    )
+
+    # Left panel: Prior
+    fig.add_trace(
+        go.Heatmap(
+            x=grid_x[0, :], y=grid_y[:, 0], z=prior,
+            colorscale="YlOrRd", zmin=0, zmax=max(float(np.max(prior)), 0.01),
+            colorbar=dict(title="P(leak)", x=0.42, thickness=15, len=0.75),
+            name="Prior",
+            hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P: %{z:.4f}<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    # Right panel: Posterior
+    fig.add_trace(
+        go.Heatmap(
+            x=grid_x[0, :], y=grid_y[:, 0], z=posterior,
+            colorscale="YlOrRd", zmin=0, zmax=max(float(np.max(posterior)), 0.01),
+            colorbar=dict(title="P(leak)", x=1.0, thickness=15, len=0.75),
+            name="Posterior",
+            hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P: %{z:.4f}<extra></extra>",
+        ),
+        row=1, col=2,
+    )
+
+    # Sources and layout on both panels
+    src_x = [s["x"] for s in sources]
+    src_y = [s["y"] for s in sources]
+    src_names = [s["name"] for s in sources]
+
+    for col_idx in [1, 2]:
+        if facility_layout:
+            _add_facility_layout(fig, facility_layout, row=1, col=col_idx,
+                                 show_legend=(col_idx == 1))
+        fig.add_trace(
+            go.Scatter(
+                x=src_x, y=src_y,
+                mode="markers" + ("+text" if col_idx == 1 else ""),
+                marker=dict(size=10, color="lime", symbol="diamond",
+                            line=dict(width=1, color="black")),
+                text=src_names,
+                textposition="top center",
+                textfont=dict(size=9, color="white"),
+                name="Leak Sources",
+                showlegend=(col_idx == 1),
+                hovertemplate="%{text}<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            ),
+            row=1, col=col_idx,
+        )
+        _add_compass_rose(fig, wind_speed, wind_direction_deg, row=1, col=col_idx)
+
+    fig.update_layout(
+        height=650,
+        template="plotly_dark",
+        font=dict(family="sans-serif"),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.15, xanchor="center", x=0.5),
+        margin=dict(l=50, r=50, t=50, b=70),
+    )
+    for c in [1, 2]:
+        fig.update_xaxes(title_text="East (m)", title_font_size=11, row=1, col=c)
+        fig.update_yaxes(title_text="North (m)", title_font_size=11, row=1, col=c)
+
+    return fig
+
+
+def create_convergence_figure(
+    entropy_history: List[float],
+) -> go.Figure:
+    """Create a convergence chart: total entropy vs measurement step.
+
+    Shows a dashed horizontal line at the initial entropy for reference.
+    """
+    steps = list(range(len(entropy_history)))
+    initial = entropy_history[0] if entropy_history else 0.0
+
+    fig = go.Figure()
+
+    # Initial entropy reference line
+    fig.add_trace(
+        go.Scatter(
+            x=[steps[0], steps[-1]],
+            y=[initial, initial],
+            mode="lines",
+            line=dict(color="rgba(255,255,255,0.3)", width=2, dash="dash"),
+            name="Initial Entropy",
+        )
+    )
+
+    # Entropy curve
+    fig.add_trace(
+        go.Scatter(
+            x=steps,
+            y=entropy_history,
+            mode="lines+markers",
+            line=dict(color="#00b4d8", width=3),
+            marker=dict(size=6, color="#00b4d8"),
+            name="Total Entropy",
+            hovertemplate="Step %{x}<br>Entropy: %{y:.1f} bits<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        title="Belief Convergence",
+        xaxis_title="Measurement Step",
+        yaxis_title="Total Entropy (bits)",
+        template="plotly_dark",
+        font=dict(family="sans-serif"),
+        height=350,
+        margin=dict(l=50, r=30, t=40, b=50),
+    )
+
+    return fig
+
+
+@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def create_score_profile(
     recommendations: List[dict],
 ) -> go.Figure:
@@ -794,7 +1046,7 @@ def create_score_profile(
             x=labels,
             y=scores,
             name="Tasking Score",
-            marker_color="gold",
+            marker_color="#00b4d8",
             hovertemplate=(
                 "Score: %{y:.4f}<br>"
                 "P(detect): %{customdata[0]:.3f}<br>"
@@ -809,7 +1061,9 @@ def create_score_profile(
         xaxis_title="Waypoint",
         yaxis_title="Tasking Score",
         template="plotly_dark",
-        height=300,
+        font=dict(family="sans-serif"),
+        height=280,
+        margin=dict(l=50, r=30, t=40, b=50),
     )
 
     return fig

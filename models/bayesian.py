@@ -185,6 +185,14 @@ class BayesianBeliefMap:
         """Return the current posterior belief map."""
         return self.belief.copy()
 
+    def set_belief(self, belief: np.ndarray) -> None:
+        """Restore a saved posterior as the current belief.
+
+        Args:
+            belief: 2D array of P(leak), same shape as grid.
+        """
+        self.belief = np.clip(belief.copy(), 0.0, 1.0)
+
     def reset(self) -> None:
         """Reset belief to the original prior and clear measurement history."""
         self.belief = self.prior.copy()

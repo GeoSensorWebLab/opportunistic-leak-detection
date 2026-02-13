@@ -99,3 +99,40 @@ class TestComputeOpportunityMap:
         )
         assert np.allclose(conc, 0.0)
         assert np.all(det < 0.01)  # sigmoid(0 - 5) is very small
+
+    def test_integrated_plume_mode(self, single_source, default_wind):
+        """Crosswind-integrated plume mode should produce valid results."""
+        X, Y, conc_ppm, det_prob = compute_opportunity_map(
+            sources=[single_source],
+            grid_size=200,
+            resolution=10,
+            receptor_height=1.5,
+            plume_mode="integrated",
+            **default_wind,
+        )
+        assert np.any(conc_ppm > 0)
+        assert np.all(det_prob >= 0.0)
+        assert np.all(det_prob <= 1.0)
+
+    def test_integrated_broader_than_instantaneous(self, single_source, default_wind):
+        """Integrated mode should produce broader (more non-zero cells) plumes."""
+        _, _, conc_inst, _ = compute_opportunity_map(
+            sources=[single_source],
+            grid_size=200,
+            resolution=10,
+            receptor_height=1.5,
+            plume_mode="instantaneous",
+            **default_wind,
+        )
+        _, _, conc_integ, _ = compute_opportunity_map(
+            sources=[single_source],
+            grid_size=200,
+            resolution=10,
+            receptor_height=1.5,
+            plume_mode="integrated",
+            **default_wind,
+        )
+        # Count cells with non-trivial concentration
+        n_inst = np.sum(conc_inst > 0.01)
+        n_integ = np.sum(conc_integ > 0.01)
+        assert n_integ >= n_inst, "Integrated plume should have at least as many non-zero cells"

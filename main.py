@@ -13,11 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
+import pandas as pd
 
+from data.interfaces import MockDataProvider
 from data.mock_data import (
-    get_leak_sources,
-    get_baseline_path,
-    get_wind_scenarios,
     get_wind_distribution,
     get_wind_fan,
 )
@@ -42,6 +41,9 @@ from visualization.plots import (
     create_single_map_figure,
     create_concentration_figure,
     create_score_profile,
+    create_entropy_figure,
+    create_prior_posterior_figure,
+    create_convergence_figure,
 )
 from optimization.information_gain import (
     compute_information_scores,
@@ -66,6 +68,9 @@ from config import (
     DEFAULT_PUFF_TIME_S,
 )
 
+# ── Data Provider ────────────────────────────────────────────────────────────
+data_provider = MockDataProvider()
+
 # ── Page Config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
@@ -74,303 +79,401 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("Methane Leak Opportunistic Tasking System")
-st.markdown(
-    "Recommends optimal locations for a field worker to detect methane leaks "
-    "based on wind conditions, equipment risk profiles, and their existing route."
-)
 
-# ── Sidebar Controls ─────────────────────────────────────────────────────────
+# ── Custom CSS ──────────────────────────────────────────────────────────────
 
-st.sidebar.header("Wind Conditions")
+def _inject_custom_css():
+    st.markdown("""
+    <style>
+    /* Reduce default top padding */
+    .block-container { padding-top: 1.5rem; }
 
-# Preset scenarios
-scenarios = get_wind_scenarios()
-scenario_names = ["Custom"] + [s["name"] for s in scenarios]
-selected_scenario = st.sidebar.selectbox("Preset Scenario", scenario_names)
+    /* Metric cards */
+    [data-testid="stMetric"] {
+        background: rgba(255,255,255,0.03);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        padding: 12px 16px;
+    }
+    [data-testid="stMetric"] label { font-size: 0.78rem; opacity: 0.7; }
 
-if selected_scenario != "Custom":
-    scenario = next(s for s in scenarios if s["name"] == selected_scenario)
-    default_speed = scenario["speed"]
-    default_dir = scenario["direction"]
-    default_stab = scenario["stability_class"]
-else:
-    default_speed = DEFAULT_WIND_SPEED
-    default_dir = DEFAULT_WIND_DIRECTION
-    default_stab = DEFAULT_STABILITY_CLASS
+    /* Tab accent color */
+    .stTabs [data-baseweb="tab-highlight"] {
+        background-color: #00b4d8;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #00b4d8;
+    }
 
-wind_speed = st.sidebar.slider(
-    "Wind Speed (m/s)",
-    min_value=0.5,
-    max_value=15.0,
-    value=default_speed,
-    step=0.5,
-)
+    /* Subtler dividers */
+    hr { opacity: 0.15; }
 
-wind_direction = st.sidebar.slider(
-    "Wind Direction (degrees, meteorological — direction wind comes FROM)",
-    min_value=0,
-    max_value=359,
-    value=default_dir,
-    step=5,
-)
+    /* Sidebar expander styling */
+    .stSidebar [data-testid="stExpander"] {
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 6px;
+        margin-bottom: 4px;
+    }
 
-stability_class = st.sidebar.select_slider(
-    "Atmospheric Stability (A=very unstable, F=very stable)",
-    options=["A", "B", "C", "D", "E", "F"],
-    value=default_stab,
-)
+    /* Dataframe styling */
+    [data-testid="stDataFrame"] {
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+    }
 
-# ── Wind Ensemble ───────────────────────────────────────────────────────────
+    /* Status badge styling */
+    .status-badge {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 12px;
+        font-size: 0.75rem;
+        font-weight: 500;
+        margin-right: 6px;
+        background: rgba(0, 180, 216, 0.15);
+        color: #00b4d8;
+        border: 1px solid rgba(0, 180, 216, 0.3);
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-use_ensemble = st.sidebar.checkbox(
-    "Enable wind ensemble",
-    value=False,
-    help="Average detection probability across multiple wind scenarios "
-         "to make recommendations robust to wind variability.",
-)
 
-wind_scenarios = None
-if use_ensemble:
-    ensemble_mode = st.sidebar.radio(
-        "Ensemble Mode",
-        ["8-Direction Rose", "Directional Fan", "Custom Scenarios"],
+_inject_custom_css()
+
+# ── Sidebar Controls ──────────────────────────────────────────────────────────
+# (Header rendered after sidebar so we can show active config badges)
+
+with st.sidebar.expander("Wind Conditions", expanded=True):
+    # Preset scenarios
+    scenarios = data_provider.get_wind_scenarios()
+    scenario_names = ["Custom"] + [s["name"] for s in scenarios]
+    selected_scenario = st.selectbox("Preset Scenario", scenario_names)
+
+    if selected_scenario != "Custom":
+        scenario = next(s for s in scenarios if s["name"] == selected_scenario)
+        default_speed = scenario["speed"]
+        default_dir = scenario["direction"]
+        default_stab = scenario["stability_class"]
+    else:
+        default_speed = DEFAULT_WIND_SPEED
+        default_dir = DEFAULT_WIND_DIRECTION
+        default_stab = DEFAULT_STABILITY_CLASS
+
+    wind_speed = st.slider(
+        "Wind Speed (m/s)",
+        min_value=0.5,
+        max_value=15.0,
+        value=default_speed,
+        step=0.5,
     )
 
-    if ensemble_mode == "8-Direction Rose":
-        wind_scenarios = get_wind_distribution()
-    elif ensemble_mode == "Directional Fan":
-        fan_center = st.sidebar.slider(
-            "Fan Center Direction",
-            min_value=0,
-            max_value=359,
-            value=wind_direction,
-            step=5,
-        )
-        fan_spread = st.sidebar.slider(
-            "Fan Spread (degrees)",
-            min_value=5.0,
-            max_value=90.0,
-            value=DEFAULT_WIND_SPREAD_DEG,
-            step=5.0,
-        )
-        fan_count = st.sidebar.slider(
-            "Number of Scenarios",
-            min_value=3,
-            max_value=16,
-            value=DEFAULT_ENSEMBLE_SCENARIOS,
-        )
-        wind_scenarios = get_wind_fan(
-            center_direction=float(fan_center),
-            spread_deg=fan_spread,
-            num_scenarios=fan_count,
-            speed=wind_speed,
-            stability_class=stability_class,
-        )
-    else:  # Custom Scenarios — use existing presets with equal weights
-        presets = get_wind_scenarios()
-        wind_scenarios = [
-            {
-                "direction": p["direction"],
-                "speed": p["speed"],
-                "stability_class": p["stability_class"],
-                "weight": 1.0 / len(presets),
-            }
-            for p in presets
-        ]
-
-    st.sidebar.caption(f"Ensemble: {len(wind_scenarios)} scenarios")
-
-# ── Compass Widget (sidebar) ────────────────────────────────────────────────
-
-st.sidebar.markdown("---")
-components.html(compass_html(wind_direction, wind_speed), height=200)
-
-# ── Optimizer Settings ───────────────────────────────────────────────────────
-
-st.sidebar.header("Optimizer Settings")
-
-scoring_mode = st.sidebar.radio(
-    "Scoring Method",
-    ["Heuristic", "Information-Theoretic (EER)"],
-    help="**Heuristic**: P(detect) / deviation — fast, uses detection probability. "
-         "**EER**: Expected Entropy Reduction — measures where you learn the "
-         "most about leak locations. Requires prior risk model.",
-)
-
-max_deviation = st.sidebar.slider(
-    "Max Path Deviation (m)",
-    min_value=50,
-    max_value=500,
-    value=int(MAX_DEVIATION_M),
-    step=25,
-)
-
-top_k = st.sidebar.slider(
-    "Number of Recommendations",
-    min_value=1,
-    max_value=10,
-    value=TOP_K_RECOMMENDATIONS,
-)
-
-grid_resolution = st.sidebar.select_slider(
-    "Grid Resolution (m) — lower = finer but slower",
-    options=[2, 5, 10, 20],
-    value=GRID_RESOLUTION_M,
-)
-
-plume_mode = st.sidebar.radio(
-    "Plume Model",
-    ["Instantaneous (standard)", "Crosswind-Integrated", "Gaussian Puff"],
-    help="**Instantaneous**: Standard Gaussian plume — sharp, narrow peaks. "
-         "**Crosswind-Integrated**: Integrates out lateral dispersion for "
-         "broader, lower-peak plumes that better match time-averaged field "
-         "measurements under turbulent conditions. "
-         "**Gaussian Puff**: Instantaneous release model — a single mass "
-         "puff drifting downwind, suitable for intermittent/episodic leaks.",
-)
-if "Crosswind" in plume_mode:
-    plume_mode_key = "integrated"
-elif "Puff" in plume_mode:
-    plume_mode_key = "puff"
-else:
-    plume_mode_key = "instantaneous"
-
-puff_time_s = DEFAULT_PUFF_TIME_S
-if plume_mode_key == "puff":
-    puff_time_s = st.sidebar.slider(
-        "Time Since Puff Release (s)",
-        min_value=10.0,
-        max_value=600.0,
-        value=DEFAULT_PUFF_TIME_S,
-        step=10.0,
-        help="Time elapsed since the instantaneous puff release. "
-             "Larger values mean the puff has traveled farther and dispersed more.",
+    wind_direction = st.slider(
+        "Wind Direction (deg, meteorological)",
+        min_value=0,
+        max_value=359,
+        value=default_dir,
+        step=5,
     )
+
+    stability_class = st.select_slider(
+        "Stability (A=unstable, F=stable)",
+        options=["A", "B", "C", "D", "E", "F"],
+        value=default_stab,
+    )
+
+    use_ensemble = st.checkbox(
+        "Enable wind ensemble",
+        value=False,
+        help="Average detection probability across multiple wind scenarios.",
+    )
+
+    wind_scenarios = None
+    if use_ensemble:
+        ensemble_mode = st.radio(
+            "Ensemble Mode",
+            ["8-Direction Rose", "Directional Fan", "Custom Scenarios"],
+        )
+
+        if ensemble_mode == "8-Direction Rose":
+            wind_scenarios = get_wind_distribution()
+        elif ensemble_mode == "Directional Fan":
+            fan_center = st.slider(
+                "Fan Center Direction",
+                min_value=0,
+                max_value=359,
+                value=wind_direction,
+                step=5,
+            )
+            fan_spread = st.slider(
+                "Fan Spread (degrees)",
+                min_value=5.0,
+                max_value=90.0,
+                value=DEFAULT_WIND_SPREAD_DEG,
+                step=5.0,
+            )
+            fan_count = st.slider(
+                "Number of Scenarios",
+                min_value=3,
+                max_value=16,
+                value=DEFAULT_ENSEMBLE_SCENARIOS,
+            )
+            wind_scenarios = get_wind_fan(
+                center_direction=float(fan_center),
+                spread_deg=fan_spread,
+                num_scenarios=fan_count,
+                speed=wind_speed,
+                stability_class=stability_class,
+            )
+        else:  # Custom Scenarios — use existing presets with equal weights
+            presets = data_provider.get_wind_scenarios()
+            wind_scenarios = [
+                {
+                    "direction": p["direction"],
+                    "speed": p["speed"],
+                    "stability_class": p["stability_class"],
+                    "weight": 1.0 / len(presets),
+                }
+                for p in presets
+            ]
+
+        st.caption(f"Ensemble: {len(wind_scenarios)} scenarios")
+
+    components.html(compass_html(wind_direction, wind_speed), height=190)
+
+# ── Plume & Optimizer ────────────────────────────────────────────────────────
+
+with st.sidebar.expander("Plume & Optimizer", expanded=True):
+    scoring_mode = st.radio(
+        "Scoring Method",
+        ["Heuristic", "Information-Theoretic (EER)"],
+        help="**Heuristic**: P(detect) / deviation. "
+             "**EER**: Expected Entropy Reduction.",
+    )
+
+    plume_mode = st.radio(
+        "Plume Model",
+        ["Instantaneous (standard)", "Crosswind-Integrated", "Gaussian Puff"],
+        help="**Instantaneous**: Sharp Gaussian plume. "
+             "**Crosswind-Integrated**: Broader, time-averaged plumes. "
+             "**Gaussian Puff**: Episodic/intermittent releases.",
+    )
+    if "Crosswind" in plume_mode:
+        plume_mode_key = "integrated"
+    elif "Puff" in plume_mode:
+        plume_mode_key = "puff"
+    else:
+        plume_mode_key = "instantaneous"
+
+    puff_time_s = DEFAULT_PUFF_TIME_S
+    if plume_mode_key == "puff":
+        puff_time_s = st.slider(
+            "Time Since Puff Release (s)",
+            min_value=10.0,
+            max_value=600.0,
+            value=DEFAULT_PUFF_TIME_S,
+            step=10.0,
+        )
+
+    max_deviation = st.slider(
+        "Max Path Deviation (m)",
+        min_value=50,
+        max_value=500,
+        value=int(MAX_DEVIATION_M),
+        step=25,
+    )
+
+    top_k = st.slider(
+        "Recommendations",
+        min_value=1,
+        max_value=10,
+        value=TOP_K_RECOMMENDATIONS,
+    )
+
+    grid_resolution = st.select_slider(
+        "Grid Resolution (m)",
+        options=[2, 5, 10, 20],
+        value=GRID_RESOLUTION_M,
+    )
+
+    st.divider()
+    use_multi_worker = st.checkbox("Multi-Worker Mode", value=False)
+    num_workers = 1
+    if use_multi_worker:
+        from config import DEFAULT_NUM_WORKERS, MAX_WORKERS
+        num_workers = st.slider(
+            "Number of Workers",
+            min_value=2,
+            max_value=MAX_WORKERS,
+            value=max(2, DEFAULT_NUM_WORKERS),
+        )
 
 # ── Sensor Settings ─────────────────────────────────────────────────────────
 
-st.sidebar.header("Sensor Characteristics")
-
-sensor_mdl = st.sidebar.slider(
-    "Minimum Detection Limit (ppm)",
-    min_value=0.0,
-    max_value=10.0,
-    value=SENSOR_MDL_PPM,
-    step=0.5,
-    help="Hard noise floor of the sensor. Concentrations below this value "
-         "are physically undetectable (P = 0). Typical handheld CH4 detectors: "
-         "0.5–2 ppm.",
-)
-
-sensor_threshold = st.sidebar.slider(
-    "Detection Threshold (ppm)",
-    min_value=1.0,
-    max_value=50.0,
-    value=DETECTION_THRESHOLD_PPM,
-    step=0.5,
-    help="Concentration at which probability of detection is 50%%. "
-         "The sigmoid transition is centered here.",
-)
-
-if sensor_mdl >= sensor_threshold:
-    st.sidebar.warning(
-        "MDL should be below the detection threshold. "
-        "Current settings may produce unexpected results."
+with st.sidebar.expander("Sensor Settings", expanded=False):
+    sensor_mdl = st.slider(
+        "Minimum Detection Limit (ppm)",
+        min_value=0.0,
+        max_value=10.0,
+        value=SENSOR_MDL_PPM,
+        step=0.5,
+        help="Hard noise floor. Concentrations below are undetectable (P=0).",
     )
 
-# ── Prior Model Settings ────────────────────────────────────────────────────
-
-st.sidebar.header("Prior Risk Model")
-
-use_prior = st.sidebar.checkbox(
-    "Enable risk-based prior weighting",
-    value=True,
-    help="When enabled, recommendations are biased toward equipment with "
-         "higher leak probability based on age, type, production rate, "
-         "and inspection recency.",
-)
-
-# ── Temporal Behavior ──────────────────────────────────────────────────────
-
-st.sidebar.header("Temporal Behavior")
-
-st.sidebar.caption(
-    "Duty cycle: fraction of time each source is actively emitting "
-    "(1.0 = continuous, 0.0 = never). Reflects intermittent leaks "
-    "from pressure cycling, thermal effects, etc."
-)
-
-# ── Bayesian Update Settings ───────────────────────────────────────────────
-
-st.sidebar.header("Bayesian Updates")
-
-use_bayesian = st.sidebar.checkbox(
-    "Enable Bayesian belief updating",
-    value=False,
-    help="Update the belief map with field observations (detections or "
-         "non-detections) to refine leak location estimates. Requires "
-         "prior risk model to be enabled.",
-)
-
-if use_bayesian and not use_prior:
-    st.sidebar.warning("Bayesian updates require the prior risk model to be enabled.")
-    use_bayesian = False
-
-if use_bayesian:
-    st.sidebar.subheader("Add Measurement")
-    meas_x = st.sidebar.number_input("Measurement X (m)", value=0.0, step=10.0)
-    meas_y = st.sidebar.number_input("Measurement Y (m)", value=0.0, step=10.0)
-    meas_conc = st.sidebar.number_input(
-        "Concentration (ppm)", value=0.0, min_value=0.0, step=1.0,
+    sensor_threshold = st.slider(
+        "Detection Threshold (ppm)",
+        min_value=1.0,
+        max_value=50.0,
+        value=DETECTION_THRESHOLD_PPM,
+        step=0.5,
+        help="Concentration at which P(detection) = 50%.",
     )
-    meas_detected = st.sidebar.checkbox("Detection triggered", value=False)
 
-    col_add, col_reset = st.sidebar.columns(2)
-    add_measurement = col_add.button("Add Measurement")
-    reset_belief = col_reset.button("Reset Belief")
-
-    # Initialize session state for Bayesian belief map
-    if "bayesian_measurements" not in st.session_state:
-        st.session_state.bayesian_measurements = []
-
-    if reset_belief:
-        st.session_state.bayesian_measurements = []
-        if "belief_map_obj" in st.session_state:
-            del st.session_state["belief_map_obj"]
-
-    if add_measurement:
-        new_meas = Measurement(
-            x=meas_x,
-            y=meas_y,
-            concentration_ppm=meas_conc,
-            detected=meas_detected,
-            wind_speed=wind_speed,
-            wind_direction_deg=float(wind_direction),
-            stability_class=stability_class,
+    if sensor_mdl >= sensor_threshold:
+        st.warning(
+            "MDL should be below the detection threshold."
         )
-        st.session_state.bayesian_measurements.append(new_meas)
 
-    n_meas = len(st.session_state.get("bayesian_measurements", []))
-    st.sidebar.caption(f"Measurements recorded: {n_meas}")
+# ── Prior & Bayesian ────────────────────────────────────────────────────────
+
+with st.sidebar.expander("Prior & Bayesian", expanded=False):
+    use_prior = st.checkbox(
+        "Enable risk-based prior",
+        value=True,
+        help="Bias recommendations toward higher-risk equipment.",
+    )
+
+    use_bayesian = st.checkbox(
+        "Enable Bayesian belief updating",
+        value=False,
+        help="Update belief map with field observations.",
+    )
+
+    if use_bayesian and not use_prior:
+        st.warning("Bayesian updates require the prior risk model.")
+        use_bayesian = False
+
+    if use_bayesian:
+        st.markdown("**Add Measurement**")
+        meas_x = st.number_input("Measurement X (m)", value=0.0, step=10.0)
+        meas_y = st.number_input("Measurement Y (m)", value=0.0, step=10.0)
+        meas_conc = st.number_input(
+            "Concentration (ppm)", value=0.0, min_value=0.0, step=1.0,
+        )
+        meas_detected = st.checkbox("Detection triggered", value=False)
+
+        col_add, col_reset = st.columns(2)
+        add_measurement = col_add.button("Add Measurement")
+        reset_belief = col_reset.button("Reset Belief")
+
+        # Initialize session state for Bayesian belief map
+        if "bayesian_measurements" not in st.session_state:
+            st.session_state.bayesian_measurements = []
+        if "entropy_history" not in st.session_state:
+            st.session_state.entropy_history = []
+
+        if reset_belief:
+            st.session_state.bayesian_measurements = []
+            st.session_state.entropy_history = []
+            if "belief_map_obj" in st.session_state:
+                del st.session_state["belief_map_obj"]
+
+        if add_measurement:
+            new_meas = Measurement(
+                x=meas_x,
+                y=meas_y,
+                concentration_ppm=meas_conc,
+                detected=meas_detected,
+                wind_speed=wind_speed,
+                wind_direction_deg=float(wind_direction),
+                stability_class=stability_class,
+            )
+            st.session_state.bayesian_measurements.append(new_meas)
+
+        n_meas = len(st.session_state.get("bayesian_measurements", []))
+        st.caption(f"Measurements recorded: {n_meas}")
+
+        st.divider()
+        st.markdown("**Restore Saved State**")
+        uploaded_state = st.file_uploader(
+            "Upload .npz belief state",
+            type=["npz"],
+            key="state_upload",
+        )
+        if uploaded_state is not None:
+            from data.state_io import deserialize_state
+            try:
+                state_data = deserialize_state(uploaded_state.read())
+                st.session_state.bayesian_measurements = state_data.get("measurements", [])
+                st.session_state.entropy_history = state_data.get("entropy_history", [])
+                st.session_state["_restored_belief"] = state_data["belief"]
+                st.success(f"Restored state with {len(state_data.get('measurements', []))} measurements")
+            except Exception as e:
+                st.error(f"Failed to load state: {e}")
+
+    st.divider()
+    use_campaign = st.checkbox(
+        "Campaign Mode (multi-day)",
+        value=False,
+        help="Carry forward posterior belief across inspection days.",
+    )
+    if use_campaign:
+        if "campaign_state" not in st.session_state:
+            from optimization.campaign import CampaignState
+            st.session_state.campaign_state = CampaignState()
+        campaign_days = len(st.session_state.campaign_state.days)
+        st.caption(f"Campaign days completed: {campaign_days}")
+
+        if st.button("Start New Day"):
+            st.session_state["_campaign_start_day"] = True
+        if st.button("Reset Campaign"):
+            from optimization.campaign import CampaignState
+            st.session_state.campaign_state = CampaignState()
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 
-sources = get_leak_sources()
-baseline_path = get_baseline_path()
+sources = data_provider.get_leak_sources()
+baseline_path = data_provider.get_baseline_path()
 facility_layout = get_facility_layout()
 
-# Apply per-source duty cycle sliders (in the Temporal Behavior sidebar section)
-for src in sources:
-    dc = st.sidebar.slider(
-        f"Duty Cycle — {src['name']}",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(src.get("duty_cycle", DEFAULT_DUTY_CYCLE)),
-        step=0.05,
-        key=f"dc_{src['name']}",
+# ── Temporal Behavior (needs sources loaded) ────────────────────────────────
+
+with st.sidebar.expander("Temporal (Duty Cycles)", expanded=False):
+    st.caption(
+        "Duty cycle: fraction of time each source actively emits "
+        "(1.0 = continuous, 0.0 = never)."
     )
-    src["duty_cycle"] = dc
+    for src in sources:
+        dc = st.slider(
+            f"Duty Cycle — {src['name']}",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(src.get("duty_cycle", DEFAULT_DUTY_CYCLE)),
+            step=0.05,
+            key=f"dc_{src['name']}",
+        )
+        src["duty_cycle"] = dc
+
+    st.divider()
+    time_resolved = st.checkbox(
+        "Time-resolved (Bernoulli) mode",
+        value=False,
+        help="Each source is randomly on/off per its duty cycle instead of time-averaged.",
+    )
+
+    if time_resolved:
+        if "temporal_seed" not in st.session_state:
+            st.session_state.temporal_seed = 42
+        if st.button("Resample"):
+            st.session_state.temporal_seed += 1
+        rng_tr = np.random.default_rng(st.session_state.temporal_seed)
+        active_sources = []
+        for src in sources:
+            dc = src.get("duty_cycle", 1.0)
+            if rng_tr.random() < dc:
+                active_src = dict(src, duty_cycle=1.0)
+                active_sources.append(active_src)
+        st.caption(f"Active sources: {len(active_sources)} / {len(sources)}")
+    else:
+        active_sources = None
 
 # ── Prior Computation ───────────────────────────────────────────────────────
 
@@ -383,10 +486,13 @@ if use_prior:
 
 # ── Cached Computation ───────────────────────────────────────────────────────
 
+# Use active_sources in time-resolved mode, otherwise original sources
+compute_sources = active_sources if (time_resolved and active_sources is not None) else sources
+
 # Convert sources to a hashable key for the cache (6-tuple with duty_cycle)
 sources_key = tuple(
     (s["name"], s["x"], s["y"], s["z"], s["emission_rate"], s.get("duty_cycle", 1.0))
-    for s in sources
+    for s in compute_sources
 )
 
 # Hashable baseline path key for path-deviation cache
@@ -431,8 +537,13 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
             prior=spatial_prior,
             sources=sources,
         )
-        for m in st.session_state.get("bayesian_measurements", []):
+        # Replay measurements and record entropy after each update
+        measurements_list = st.session_state.get("bayesian_measurements", [])
+        entropy_hist = [compute_total_entropy(bayesian_obj.get_belief_map())]
+        for m in measurements_list:
             bayesian_obj.update(m)
+            entropy_hist.append(compute_total_entropy(bayesian_obj.get_belief_map()))
+        st.session_state.entropy_history = entropy_hist
         belief_map = bayesian_obj.get_belief_map()
         scoring_prior = belief_map  # posterior replaces raw prior in scoring
 
@@ -506,9 +617,48 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
 
     optimized_path = build_optimized_path(baseline_path, recommendations)
 
+    # Multi-worker allocation
+    worker_routes = None
+    if use_multi_worker and num_workers > 1:
+        from optimization.multi_worker import split_baseline_path, allocate_waypoints
+        worker_paths = split_baseline_path(baseline_path, num_workers)
+        worker_routes = allocate_waypoints(recommendations, worker_paths, float(max_deviation))
+
+    # Share data to Worker Guidance page via session state
+    st.session_state["_wg_grid_x"] = X
+    st.session_state["_wg_grid_y"] = Y
+    st.session_state["_wg_scores"] = scores
+    st.session_state["_wg_optimized_path"] = optimized_path
+    st.session_state["_wg_recommendations"] = recommendations
+    st.session_state["_wg_baseline_path"] = baseline_path
+
 # ── Route Metrics ────────────────────────────────────────────────────────────
 
 metrics = compute_route_metrics(baseline_path, optimized_path, recommendations)
+
+# ── Header ────────────────────────────────────────────────────────────────────
+
+_hdr_left, _hdr_right = st.columns([3, 2])
+with _hdr_left:
+    st.title("Methane Leak Opportunistic Tasking")
+    st.caption(
+        "Optimal locations for field workers to detect methane leaks — "
+        "combining atmospheric dispersion, equipment risk, and route planning."
+    )
+with _hdr_right:
+    _wind_label = f"Wind {wind_direction}\u00b0 @ {wind_speed} m/s"
+    _scoring_label = "EER" if use_eer else "Heuristic"
+    _plume_label = plume_mode_key.capitalize()
+    _ensemble_label = "Ensemble" if (use_ensemble and wind_scenarios) else "Single"
+    st.markdown(
+        f'<div style="text-align:right; padding-top:1.2rem;">'
+        f'<span class="status-badge">{_wind_label}</span>'
+        f'<span class="status-badge">{_plume_label}</span>'
+        f'<span class="status-badge">{_scoring_label}</span>'
+        f'<span class="status-badge">{_ensemble_label}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 # ── Summary Metrics Banner ───────────────────────────────────────────────────
 
@@ -524,20 +674,27 @@ m3.metric(
 m4.metric("Detour Points", f"{metrics['num_detour_points']}")
 m5.metric("Avg Detection Prob", f"{metrics['avg_detection_prob']:.1%}")
 
-# ── Visualization ──────────────────────────────────────────────────────────
+# ── Visualization (Tabs) ───────────────────────────────────────────────────
 
-view_options = ["Detection Map", "Concentration Map", "Side-by-Side"]
+_tab_names = ["Detection Map", "Concentration Map", "Side-by-Side"]
 if use_bayesian and belief_map is not None:
-    view_options.append("Belief Map")
+    _tab_names.append("Belief Map")
+    _tab_names.append("Entropy Map")
+    _tab_names.append("Prior vs Posterior")
+    entropy_history = st.session_state.get("entropy_history", [])
+    if len(entropy_history) > 1:
+        _tab_names.append("Convergence")
 
-active_view = st.radio(
-    "Map View",
-    view_options,
-    horizontal=True,
-    label_visibility="collapsed",
-)
+_tabs = st.tabs(_tab_names)
 
-if active_view == "Detection Map":
+with _tabs[0]:  # Detection Map
+    # Convert worker_routes to serializable tuples for caching
+    _wr_key = None
+    if worker_routes and len(worker_routes) > 1:
+        _wr_key = tuple(
+            (r.worker_id, tuple(map(tuple, r.optimized_path)) if r.optimized_path is not None else ())
+            for r in worker_routes
+        )
     fig_detect = create_single_map_figure(
         grid_x=X,
         grid_y=Y,
@@ -549,10 +706,11 @@ if active_view == "Detection Map":
         wind_speed=wind_speed,
         wind_direction_deg=wind_direction,
         facility_layout=facility_layout,
+        worker_routes=worker_routes if worker_routes and len(worker_routes) > 1 else None,
     )
     st.plotly_chart(fig_detect, use_container_width=True)
 
-elif active_view == "Concentration Map":
+with _tabs[1]:  # Concentration Map
     fig_conc = create_concentration_figure(
         grid_x=X,
         grid_y=Y,
@@ -564,7 +722,7 @@ elif active_view == "Concentration Map":
     )
     st.plotly_chart(fig_conc, use_container_width=True)
 
-elif active_view == "Side-by-Side":
+with _tabs[2]:  # Side-by-Side
     fig_site = create_site_figure(
         grid_x=X,
         grid_y=Y,
@@ -580,64 +738,99 @@ elif active_view == "Side-by-Side":
     )
     st.plotly_chart(fig_site, use_container_width=True)
 
-elif active_view == "Belief Map" and belief_map is not None:
-    import copy
-    fig_belief = copy.deepcopy(create_single_map_figure(
-        grid_x=X,
-        grid_y=Y,
-        detection_prob=belief_map,
-        sources=sources,
-        baseline_path=baseline_path,
-        optimized_path=optimized_path,
-        recommendations=recommendations,
-        wind_speed=wind_speed,
-        wind_direction_deg=wind_direction,
-        facility_layout=facility_layout,
-        colorbar_title="P(leak)",
-    ))
-    # Overlay measurement markers
-    measurements = st.session_state.get("bayesian_measurements", [])
-    if measurements:
-        import plotly.graph_objects as go
-        det_x = [m.x for m in measurements if m.detected]
-        det_y = [m.y for m in measurements if m.detected]
-        nodet_x = [m.x for m in measurements if not m.detected]
-        nodet_y = [m.y for m in measurements if not m.detected]
+if use_bayesian and belief_map is not None:
+    with _tabs[3]:  # Belief Map
+        import copy
+        fig_belief = copy.deepcopy(create_single_map_figure(
+            grid_x=X,
+            grid_y=Y,
+            detection_prob=belief_map,
+            sources=sources,
+            baseline_path=baseline_path,
+            optimized_path=optimized_path,
+            recommendations=recommendations,
+            wind_speed=wind_speed,
+            wind_direction_deg=wind_direction,
+            facility_layout=facility_layout,
+            colorbar_title="P(leak)",
+        ))
+        # Overlay measurement markers
+        measurements = st.session_state.get("bayesian_measurements", [])
+        if measurements:
+            import plotly.graph_objects as go
+            det_x = [m.x for m in measurements if m.detected]
+            det_y = [m.y for m in measurements if m.detected]
+            nodet_x = [m.x for m in measurements if not m.detected]
+            nodet_y = [m.y for m in measurements if not m.detected]
 
-        if det_x:
-            fig_belief.add_trace(
-                go.Scatter(
-                    x=det_x,
-                    y=det_y,
-                    mode="markers",
-                    marker=dict(
-                        size=14,
-                        color="limegreen",
-                        symbol="circle",
-                        line=dict(width=2, color="white"),
-                    ),
-                    name="Detection (+)",
-                    hovertemplate="Detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            if det_x:
+                fig_belief.add_trace(
+                    go.Scatter(
+                        x=det_x,
+                        y=det_y,
+                        mode="markers",
+                        marker=dict(
+                            size=14,
+                            color="limegreen",
+                            symbol="circle",
+                            line=dict(width=2, color="white"),
+                        ),
+                        name="Detection (+)",
+                        hovertemplate="Detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+                    )
                 )
-            )
-        if nodet_x:
-            fig_belief.add_trace(
-                go.Scatter(
-                    x=nodet_x,
-                    y=nodet_y,
-                    mode="markers",
-                    marker=dict(
-                        size=14,
-                        color="red",
-                        symbol="x",
-                        line=dict(width=2, color="white"),
-                    ),
-                    name="Non-detection (-)",
-                    hovertemplate="Non-detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+            if nodet_x:
+                fig_belief.add_trace(
+                    go.Scatter(
+                        x=nodet_x,
+                        y=nodet_y,
+                        mode="markers",
+                        marker=dict(
+                            size=14,
+                            color="red",
+                            symbol="x",
+                            line=dict(width=2, color="white"),
+                        ),
+                        name="Non-detection (-)",
+                        hovertemplate="Non-detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
+                    )
                 )
-            )
 
-    st.plotly_chart(fig_belief, use_container_width=True)
+        st.plotly_chart(fig_belief, use_container_width=True)
+
+    # Entropy Map tab
+    with _tabs[4]:
+        fig_entropy = create_entropy_figure(
+            grid_x=X,
+            grid_y=Y,
+            belief=belief_map,
+            sources=sources,
+            wind_speed=wind_speed,
+            wind_direction_deg=wind_direction,
+            facility_layout=facility_layout,
+        )
+        st.plotly_chart(fig_entropy, use_container_width=True)
+
+    # Prior vs Posterior tab
+    with _tabs[5]:
+        fig_pp = create_prior_posterior_figure(
+            grid_x=X,
+            grid_y=Y,
+            prior=spatial_prior,
+            posterior=belief_map,
+            sources=sources,
+            wind_speed=wind_speed,
+            wind_direction_deg=wind_direction,
+            facility_layout=facility_layout,
+        )
+        st.plotly_chart(fig_pp, use_container_width=True)
+
+    # Convergence tab (only when multiple measurements)
+    entropy_history = st.session_state.get("entropy_history", [])
+    if len(entropy_history) > 1:
+        with _tabs[6]:
+            fig_conv = create_convergence_figure(entropy_history)
+            st.plotly_chart(fig_conv, use_container_width=True)
 
 # Score bar chart
 fig_scores = create_score_profile(recommendations)
@@ -648,49 +841,236 @@ st.plotly_chart(fig_scores, use_container_width=True)
 st.subheader("Recommended Waypoints")
 
 if recommendations:
+    # Build worker assignment lookup if multi-worker
+    wp_worker_map = {}
+    if worker_routes and len(worker_routes) > 1:
+        for route in worker_routes:
+            for wp in route.assigned_waypoints:
+                key = (round(wp["x"], 1), round(wp["y"], 1))
+                wp_worker_map[key] = route.worker_id + 1
+
+    rec_rows = []
     for i, rec in enumerate(recommendations):
         nearest = find_nearest_source(rec, sources)
-        col1, col2, col3, col4, col5 = st.columns(5)
-        col1.metric(f"#{i+1} Location", f"({rec['x']:.0f}, {rec['y']:.0f}) m")
-        col2.metric("Nearest Equipment", nearest or "—")
-        col3.metric("Detection Prob.", f"{rec['detection_prob']:.1%}")
-        col4.metric("Concentration", f"{rec['concentration_ppm']:.1f} ppm")
-        col5.metric("Tasking Score", f"{rec['score']:.4f}")
-        if i < len(recommendations) - 1:
-            st.divider()
+        row = {
+            "Rank": i + 1,
+            "Location": f"({rec['x']:.0f}, {rec['y']:.0f})",
+            "Nearest Equipment": nearest or "—",
+            "P(detect)": rec["detection_prob"],
+            "Concentration (ppm)": rec["concentration_ppm"],
+            "Score": rec["score"],
+        }
+        if wp_worker_map:
+            key = (round(rec["x"], 1), round(rec["y"], 1))
+            row["Worker"] = wp_worker_map.get(key, 1)
+        rec_rows.append(row)
+    rec_df = pd.DataFrame(rec_rows)
+    st.dataframe(
+        rec_df,
+        column_config={
+            "Rank": st.column_config.NumberColumn("Rank", format="%d", width="small"),
+            "P(detect)": st.column_config.ProgressColumn(
+                "P(detect)", min_value=0, max_value=1, format="%.2f",
+            ),
+            "Concentration (ppm)": st.column_config.NumberColumn(
+                "Concentration (ppm)", format="%.1f",
+            ),
+            "Score": st.column_config.NumberColumn("Score", format="%.4f"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
 else:
+    rec_df = None
     st.info(
         "No high-value waypoints found near the baseline path under current conditions. "
         "Try adjusting wind direction or increasing max deviation."
     )
 
+# ── Export Results ───────────────────────────────────────────────────────────
+
+with st.expander("Export Results"):
+    import json
+    import io
+
+    ex_c1, ex_c2, ex_c3 = st.columns(3)
+
+    # CSV export
+    with ex_c1:
+        if rec_df is not None:
+            csv_data = rec_df.to_csv(index=False)
+            st.download_button(
+                "Download CSV",
+                data=csv_data,
+                file_name="recommendations.csv",
+                mime="text/csv",
+            )
+        else:
+            st.caption("No recommendations to export.")
+
+    # JSON export
+    with ex_c2:
+        report = {
+            "scoring_mode": "EER" if use_eer else "Heuristic",
+            "wind_speed": wind_speed,
+            "wind_direction_deg": wind_direction,
+            "stability_class": stability_class,
+            "plume_mode": plume_mode_key,
+            "ensemble": use_ensemble and wind_scenarios is not None,
+            "metrics": metrics,
+            "recommendations": recommendations,
+        }
+        json_data = json.dumps(report, indent=2, default=str)
+        st.download_button(
+            "Download JSON",
+            data=json_data,
+            file_name="report.json",
+            mime="application/json",
+        )
+
+    # NPZ export (belief state when Bayesian active)
+    with ex_c3:
+        if use_bayesian and belief_map is not None:
+            buf = io.BytesIO()
+            save_dict = {
+                "belief": belief_map,
+                "grid_x": X,
+                "grid_y": Y,
+            }
+            ent_hist = st.session_state.get("entropy_history", [])
+            if ent_hist:
+                save_dict["entropy_history"] = np.array(ent_hist)
+            np.savez_compressed(buf, **save_dict)
+            buf.seek(0)
+            st.download_button(
+                "Download NPZ (Belief)",
+                data=buf.getvalue(),
+                file_name="belief_state.npz",
+                mime="application/octet-stream",
+            )
+        else:
+            st.caption("Enable Bayesian mode for belief state export.")
+
+# ── Campaign Mode Panel ─────────────────────────────────────────────────────
+
+if use_campaign:
+    from optimization.campaign import plan_next_day, close_day, campaign_summary, CampaignState, DayPlan
+    import plotly.graph_objects as go
+
+    with st.expander("Campaign Planning (Multi-Day)", expanded=True):
+        camp = st.session_state.campaign_state
+
+        # Day selector
+        completed_days = len(camp.days)
+        if completed_days > 0:
+            day_options = [f"Day {d.day_index + 1}" for d in camp.days]
+            selected_day_label = st.selectbox("Review Past Day", day_options)
+            selected_day_idx = int(selected_day_label.split()[-1]) - 1
+            selected_day = camp.days[selected_day_idx]
+            st.caption(
+                f"Entropy: {selected_day.entropy_start:.0f} -> {selected_day.entropy_end:.0f} bits  |  "
+                f"Measurements: {len(selected_day.measurements)}"
+            )
+
+        # Action buttons
+        camp_c1, camp_c2 = st.columns(2)
+        with camp_c1:
+            if st.button("Plan Next Day", key="camp_plan"):
+                wind_p = {
+                    "wind_speed": wind_speed,
+                    "wind_direction_deg": float(wind_direction),
+                    "stability_class": stability_class,
+                }
+                day_plan = plan_next_day(
+                    camp, sources, wind_p, baseline_path,
+                    max_deviation=float(max_deviation),
+                    resolution=float(grid_resolution),
+                )
+                st.session_state["_active_day_plan"] = day_plan
+                st.success(f"Day {day_plan.day_index + 1} planned: {len(day_plan.recommendations)} recommendations")
+
+        with camp_c2:
+            if st.button("Close Day", key="camp_close"):
+                active_plan = st.session_state.get("_active_day_plan")
+                if active_plan is not None:
+                    day_measurements = st.session_state.get("bayesian_measurements", [])
+                    close_day(camp, active_plan, day_measurements, sources)
+                    st.session_state.bayesian_measurements = []
+                    del st.session_state["_active_day_plan"]
+                    st.success(f"Day {active_plan.day_index + 1} closed with {len(day_measurements)} measurements")
+                else:
+                    st.warning("No active day plan. Click 'Plan Next Day' first.")
+
+        # Mini entropy-per-day chart
+        summary = campaign_summary(camp)
+        if summary["total_days"] > 0:
+            epd = summary["entropy_per_day"]
+            fig_camp = go.Figure()
+            fig_camp.add_trace(go.Bar(
+                x=[f"Day {e['day'] + 1}" for e in epd],
+                y=[e["start"] for e in epd],
+                name="Start Entropy",
+                marker_color="rgba(0,180,216,0.5)",
+            ))
+            fig_camp.add_trace(go.Bar(
+                x=[f"Day {e['day'] + 1}" for e in epd],
+                y=[e["end"] for e in epd],
+                name="End Entropy",
+                marker_color="#00b4d8",
+            ))
+            fig_camp.update_layout(
+                barmode="group",
+                title="Entropy per Day",
+                yaxis_title="Entropy (bits)",
+                template="plotly_dark",
+                height=250,
+                margin=dict(l=40, r=20, t=40, b=40),
+            )
+            st.plotly_chart(fig_camp, use_container_width=True)
+
+            st.caption(
+                f"Total days: {summary['total_days']}  |  "
+                f"Total measurements: {summary['total_measurements']}  |  "
+                f"Total entropy reduction: {summary['total_entropy_reduction']:.0f} bits"
+            )
+
 # ── Prior Risk Summary ──────────────────────────────────────────────────────
 
 with st.expander("Equipment Risk Assessment (Prior Model)"):
-    st.markdown(
-        "Prior leak probabilities are computed from equipment attributes: "
-        "**type** (compressor > valve > wellhead), **age** (older = higher risk), "
-        "**production rate** (higher throughput = more stress), and "
-        "**inspection recency** (longer since inspection = more uncertainty)."
+    st.caption(
+        "Prior leak probabilities from equipment attributes: "
+        "type, age, production rate, and inspection recency."
     )
-    st.markdown("")
 
     # Sort sources by prior probability (highest risk first)
     ranked = sorted(
         zip(sources, prior_probs), key=lambda x: x[1], reverse=True
     )
 
+    risk_rows = []
     for src, p in ranked:
         risk_level = "HIGH" if p > 0.3 else "MEDIUM" if p > 0.15 else "LOW"
-        risk_color = "red" if p > 0.3 else "orange" if p > 0.15 else "green"
-        st.markdown(
-            f"- **{src['name']}** — Prior: **{p:.1%}** "
-            f":{risk_color}_circle: {risk_level} | "
-            f"Type: {src.get('equipment_type', 'unknown')}, "
-            f"Age: {src.get('age_years', '?')} yr, "
-            f"Production: {src.get('production_rate_mcfd', 0):.0f} mcf/d, "
-            f"Last inspected: {src.get('last_inspection_days', '?')} days ago"
-        )
+        risk_rows.append({
+            "Equipment": src["name"],
+            "Prior P(leak)": p,
+            "Risk Level": risk_level,
+            "Type": src.get("equipment_type", "unknown"),
+            "Age (yr)": src.get("age_years", "?"),
+            "Production (mcf/d)": src.get("production_rate_mcfd", 0),
+            "Last Inspected (days)": src.get("last_inspection_days", "?"),
+        })
+    risk_df = pd.DataFrame(risk_rows)
+    st.dataframe(
+        risk_df,
+        column_config={
+            "Prior P(leak)": st.column_config.ProgressColumn(
+                "Prior P(leak)", min_value=0, max_value=1, format="%.1%%",
+            ),
+            "Production (mcf/d)": st.column_config.NumberColumn(format="%.0f"),
+        },
+        use_container_width=True,
+        hide_index=True,
+    )
 
 # ── Info Panel ───────────────────────────────────────────────────────────────
 

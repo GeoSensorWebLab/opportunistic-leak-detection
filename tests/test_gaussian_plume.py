@@ -2,7 +2,12 @@
 
 import numpy as np
 import pytest
-from models.gaussian_plume import gaussian_plume, compute_sigma, concentration_to_ppm
+from models.gaussian_plume import (
+    gaussian_plume,
+    crosswind_integrated_plume,
+    compute_sigma,
+    concentration_to_ppm,
+)
 
 
 class TestComputeSigma:
@@ -208,3 +213,108 @@ class TestConcentrationToPpm:
         c = np.ones((5, 10)) * 1e-6
         ppm = concentration_to_ppm(c)
         assert ppm.shape == (5, 10)
+
+
+class TestCrosswindIntegratedPlume:
+    """Tests for the crosswind-integrated Gaussian plume model."""
+
+    def test_positive_downwind(self, small_grid, default_wind):
+        """Should produce positive concentration at downwind locations."""
+        X, Y = small_grid
+        conc = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        east_mask = (X > 20) & (np.abs(Y) < 50)
+        assert np.any(conc[east_mask] > 0)
+
+    def test_zero_upwind(self, small_grid, default_wind):
+        """Should be zero at upwind locations."""
+        X, Y = small_grid
+        conc = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        upwind_mask = X < -10
+        assert np.allclose(conc[upwind_mask], 0.0)
+
+    def test_broader_than_instantaneous(self, default_wind):
+        """Crosswind-integrated plume should be broader (higher off-centerline)."""
+        # At a far-off-centerline point, integrated plume should be higher
+        # because it doesn't penalize crosswind offset
+        X = np.array([200.0])
+        Y = np.array([100.0])  # far off centerline
+
+        conc_inst = gaussian_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        conc_integ = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        # Integrated should be >= instantaneous at off-centerline points
+        assert conc_integ[0] >= conc_inst[0]
+
+    def test_linear_in_emission_rate(self, default_wind):
+        """Doubling emission should double concentration."""
+        X = np.array([100.0])
+        Y = np.array([0.0])
+
+        conc_q1 = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        conc_q2 = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=1.0,
+            **default_wind,
+        )
+        np.testing.assert_allclose(conc_q2, 2 * conc_q1, rtol=1e-10)
+
+    def test_zero_wind_speed_raises(self, small_grid):
+        """Wind speed of 0 should raise ValueError."""
+        X, Y = small_grid
+        with pytest.raises(ValueError, match="Wind speed must be positive"):
+            crosswind_integrated_plume(
+                X, Y, receptor_z=1.5,
+                source_x=0.0, source_y=0.0, source_z=0.0,
+                emission_rate=0.5,
+                wind_speed=0.0, wind_direction_deg=270.0, stability_class="D",
+            )
+
+    def test_same_shape_as_input(self, small_grid, default_wind):
+        """Output should match input grid shape."""
+        X, Y = small_grid
+        conc = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        assert conc.shape == X.shape
+
+    def test_centerline_decreases_with_distance(self, default_wind):
+        """Centerline concentration should decrease with downwind distance."""
+        distances = np.array([50.0, 100.0, 200.0, 500.0])
+        X = distances
+        Y = np.zeros_like(distances)
+
+        conc = crosswind_integrated_plume(
+            X, Y, receptor_z=1.5,
+            source_x=0.0, source_y=0.0, source_z=0.0,
+            emission_rate=0.5,
+            **default_wind,
+        )
+        assert np.all(np.diff(conc) < 0)

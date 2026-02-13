@@ -79,6 +79,10 @@ FALSE_ALARM_RATE = 0.01           # P(detection | no leak) for Bayes denominator
 # --- Information-Theoretic Scoring ---
 EER_SUBSAMPLE = 4                 # Subsample factor for EER grid (1 = full, 4 = every 4th cell)
 
+# --- Multi-Worker ---
+DEFAULT_NUM_WORKERS = 1           # Default number of field workers
+MAX_WORKERS = 5                   # Maximum number of workers supported
+
 # --- Wind Ensemble ---
 DEFAULT_ENSEMBLE_SCENARIOS = 8    # Number of wind scenarios for ensemble averaging
 DEFAULT_WIND_SPREAD_DEG = 30.0    # Half-spread for directional fan (degrees)
