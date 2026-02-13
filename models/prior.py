@@ -50,17 +50,17 @@ def compute_source_prior(source: dict) -> float:
     eq_type = source.get("equipment_type", "default")
     p_base = EQUIPMENT_LEAK_RATES.get(eq_type, EQUIPMENT_LEAK_RATES["default"])
 
-    # Age factor: older equipment has higher leak probability
+    # Age factor: older equipment has higher leak probability (capped to preserve ranking)
     age = source.get("age_years", 0)
-    f_age = 1.0 + AGE_FACTOR_SCALE * (age / AGE_REFERENCE_YEARS) ** AGE_FACTOR_EXPONENT
+    f_age = min(1.0 + AGE_FACTOR_SCALE * (age / AGE_REFERENCE_YEARS) ** AGE_FACTOR_EXPONENT, 5.0)
 
-    # Production rate factor: higher throughput increases mechanical stress
+    # Production rate factor: higher throughput increases mechanical stress (capped)
     prod_rate = source.get("production_rate_mcfd", 0.0)
-    f_production = 1.0 + PRODUCTION_RATE_SCALE * (prod_rate / PRODUCTION_RATE_REFERENCE_MCFD)
+    f_production = min(1.0 + PRODUCTION_RATE_SCALE * (prod_rate / PRODUCTION_RATE_REFERENCE_MCFD), 3.0)
 
-    # Inspection recency factor: exponential decay of inspection benefit
+    # Inspection recency factor: exponential decay of inspection benefit (capped)
     days_since = source.get("last_inspection_days", 0)
-    f_inspection = 1.0 + (1.0 - np.exp(-days_since / INSPECTION_DECAY_DAYS))
+    f_inspection = min(1.0 + (1.0 - np.exp(-days_since / INSPECTION_DECAY_DAYS)), 2.0)
 
     prior = p_base * f_age * f_production * f_inspection
     return float(np.clip(prior, 0.0, 1.0))

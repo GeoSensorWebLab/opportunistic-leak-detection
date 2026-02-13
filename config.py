@@ -27,7 +27,8 @@ AIR_MOLAR_MASS = 28.97         # g/mol (dry air average)
 AIR_DENSITY = 1.225            # kg/m^3 at sea level
 
 # --- Tasking Optimizer ---
-DEVIATION_EPSILON = 10.0       # Meters — prevents division-by-zero in cost function
+DEVIATION_EPSILON = 10.0       # Meters — legacy, kept for backward compatibility
+DEVIATION_SCALE_M = 50.0       # Meters — exponential decay scale for path deviation cost
 MAX_DEVIATION_M = 200.0        # Max distance a worker should deviate from baseline path
 TOP_K_RECOMMENDATIONS = 5      # Number of top waypoints to recommend
 MIN_WAYPOINT_SEPARATION_M = 50.0  # Minimum distance between recommended waypoints (NMS)

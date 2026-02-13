@@ -90,6 +90,10 @@ class BayesianBeliefMap:
             mdl_ppm=SENSOR_MDL_PPM,
         )
 
+        # Floor detection probability to avoid numerical distortion when
+        # both numerator and denominator approach zero (Bug #1 fix)
+        p_detect_given_leak = np.maximum(p_detect_given_leak, 1e-10)
+
         p_leak = self.belief
         p_no_leak = 1.0 - p_leak
 
@@ -114,6 +118,9 @@ class BayesianBeliefMap:
             threshold_ppm=DETECTION_THRESHOLD_PPM,
             mdl_ppm=SENSOR_MDL_PPM,
         )
+
+        # Floor detection probability for numerical stability (Bug #1 fix)
+        p_detect_given_leak = np.maximum(p_detect_given_leak, 1e-10)
         p_no_detect_given_leak = 1.0 - p_detect_given_leak
 
         p_leak = self.belief
@@ -159,11 +166,12 @@ class BayesianBeliefMap:
         sigma_y = a_y * np.power(x_safe, b_y)
         sigma_z = a_z * np.power(x_safe, b_z)
 
-        # Gaussian plume (ground-level source, receptor at measurement height)
+        # Gaussian plume (receptor at measurement height)
         Q = self._avg_emission
         u = measurement.wind_speed
         z = RECEPTOR_HEIGHT_M
-        H = 0.0  # assume ground-level hypothetical sources
+        # Use average source height for reverse plume instead of assuming ground-level
+        H = np.mean([s.get("z", 0.0) for s in self.sources]) if self.sources else 0.0
 
         norm = Q / (2.0 * np.pi * u * sigma_y * sigma_z)
         lateral = np.exp(-0.5 * (crosswind / sigma_y) ** 2)
@@ -190,7 +198,14 @@ class BayesianBeliefMap:
 
         Args:
             belief: 2D array of P(leak), same shape as grid.
+
+        Raises:
+            ValueError: If belief shape doesn't match the grid.
         """
+        if belief.shape != self.grid_x.shape:
+            raise ValueError(
+                f"Belief shape {belief.shape} does not match grid shape {self.grid_x.shape}"
+            )
         self.belief = np.clip(belief.copy(), 0.0, 1.0)
 
     def reset(self) -> None:

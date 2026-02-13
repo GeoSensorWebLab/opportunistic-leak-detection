@@ -35,6 +35,7 @@ from config import (
     DETECTION_THRESHOLD_PPM,
     SENSOR_MDL_PPM,
     DEVIATION_EPSILON,
+    DEVIATION_SCALE_M,
     EER_SUBSAMPLE,
 )
 
@@ -325,11 +326,13 @@ def compute_information_scores(
     avg_emission: float,
     epsilon: float = DEVIATION_EPSILON,
     subsample: int = EER_SUBSAMPLE,
+    deviation_scale: float = DEVIATION_SCALE_M,
 ) -> np.ndarray:
     """Compute information-theoretic tasking scores.
 
-        Score(x,y) = EER(x,y) / (PathDeviation(x,y) + epsilon)
+        Score(x,y) = EER(x,y) * exp(-Deviation(x,y) / scale)
 
+    Uses exponential decay so on-path cells get full EER value.
     Cells beyond *max_deviation* are scored 0.  This is the EER-based
     alternative to the heuristic ``compute_tasking_scores()``.
 
@@ -340,8 +343,9 @@ def compute_information_scores(
         max_deviation: Max allowable deviation (meters).
         wind_speed, wind_direction_deg, stability_class: Wind conditions.
         avg_emission: Representative emission rate (kg/s).
-        epsilon: Division-by-zero guard (meters).
+        epsilon: Legacy parameter (unused, kept for API compatibility).
         subsample: EER grid subsample factor.
+        deviation_scale: Exponential decay scale in meters (default 50m).
 
     Returns:
         2-D score array, same shape as grid_x.
@@ -359,7 +363,7 @@ def compute_information_scores(
         subsample=subsample,
     )
 
-    scores = eer / (deviation + epsilon)
+    scores = eer * np.exp(-deviation / deviation_scale)
     scores[deviation > max_deviation] = 0.0
     return scores
 
@@ -374,6 +378,7 @@ def compute_ensemble_information_scores(
     avg_emission: float,
     epsilon: float = DEVIATION_EPSILON,
     subsample: int = EER_SUBSAMPLE,
+    deviation_scale: float = DEVIATION_SCALE_M,
 ) -> np.ndarray:
     """Weighted-average information scores across wind scenarios.
 
@@ -383,6 +388,13 @@ def compute_ensemble_information_scores(
     Returns:
         2-D score array, same shape as grid_x.
     """
+    weights = [s["weight"] for s in wind_scenarios]
+    weight_sum = sum(weights)
+    if abs(weight_sum - 1.0) > 0.01:
+        raise ValueError(
+            f"Wind scenario weights must sum to 1.0, got {weight_sum:.4f}"
+        )
+
     total_eer = np.zeros_like(grid_x)
 
     for scenario in wind_scenarios:
@@ -400,6 +412,6 @@ def compute_ensemble_information_scores(
         )
         total_eer += scenario["weight"] * eer
 
-    scores = total_eer / (deviation + epsilon)
+    scores = total_eer * np.exp(-deviation / deviation_scale)
     scores[deviation > max_deviation] = 0.0
     return scores

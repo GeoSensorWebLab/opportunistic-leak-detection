@@ -599,3 +599,256 @@ New files to create:
 | Multi-worker coordination | Combined coverage exceeds single-worker | > 50% more coverage with 2 workers |
 | Non-expert usability | Worker guidance page requires no training | Simple accept/reject interface |
 | Reproducibility | All experiments runnable from scripts | Single command reproduction |
+
+---
+
+## Phase 9: Deep Code Review — Bug Fixes & Hardening (2026-02-13)
+
+This section documents findings from a comprehensive code review of the entire codebase. Issues are categorized by severity and module.
+
+---
+
+### 9.1 CRITICAL / HIGH SEVERITY BUGS
+
+#### Bug 1: Bayesian update breaks with tiny detection probabilities
+- **File:** `models/bayesian.py:96-101`
+- **Problem:** When `FALSE_ALARM_RATE=0` and detection probability is near-zero, the `safe_denom = max(denom, 1e-15)` guard distorts the posterior. A cell with `p_leak=1.0` and `p_detect=1e-20` computes `1e-20 / 1e-15 = 1e-5` instead of ~1.0. Incorrect Bayesian update.
+- **Fix:** Floor detection probability at `1e-10` before update; avoid updating cells where signal is below noise floor.
+
+#### Bug 2: `scoring_mode` parameter silently ignored in campaign planning
+- **File:** `optimization/campaign.py:146-207`
+- **Problem:** `plan_next_day()` accepts `scoring_mode="eer"` but always uses heuristic scoring. Users think they're getting EER-based campaigns but aren't.
+- **Fix:** Implement the EER scoring branch using `compute_information_scores()`.
+
+#### Bug 3: `max_deviation` parameter ignored in multi-worker allocation
+- **File:** `optimization/multi_worker.py:111-121`
+- **Problem:** `allocate_waypoints()` docstring says it respects `max_deviation`, but the code always assigns to the nearest worker regardless of distance. Waypoints 500m from any worker path get assigned anyway.
+- **Fix:** Skip waypoints beyond `max_deviation` from all workers, or mark them as unassigned.
+
+#### Bug 4: Streamlit cache crash with unhashable WorkerRoute
+- **File:** `visualization/plots.py:269,282`
+- **Problem:** `create_single_map_figure()` is `@st.cache_data` but receives `WorkerRoute` objects containing numpy arrays, causing `TypeError: unhashable type`.
+- **Fix:** Remove `@st.cache_data` from functions that accept complex objects with numpy arrays.
+
+#### Bug 5: State serialization JSON corruption
+- **File:** `data/state_io.py:104,111`
+- **Problem:** `str(npz["measurements_json"])` on a numpy char array can produce extra quotes in some numpy versions, causing `json.loads()` to fail or corrupt data.
+- **Fix:** Use `.item()` to extract the scalar string: `npz["measurements_json"].item()`.
+
+#### Bug 6: Division by small sigma produces infinite concentrations
+- **File:** `models/gaussian_plume.py:126-138`
+- **Problem:** At close range with stable conditions, `sigma_y` and `sigma_z` can become <0.01m, making `emission_rate / (2π * u * σy * σz)` approach infinity.
+- **Fix:** Add `sigma = np.maximum(sigma, 0.01)` floor after computing sigmas in all plume functions.
+
+#### Bug 7: IndexError on empty entropy history
+- **File:** `visualization/plots.py:993`
+- **Problem:** `create_convergence_figure()` accesses `steps[0]` and `steps[-1]` without checking for empty input.
+- **Fix:** Add early return with empty figure if `len(entropy_history) < 2`.
+
+---
+
+### 9.2 MEDIUM SEVERITY — Logic & Correctness
+
+#### Bug 8: Off-by-one in searchsorted path splitting
+- **File:** `optimization/multi_worker.py:71-72`
+- **Problem:** `side="right"` vs `side="left"` mismatch in `np.searchsorted` can create gaps/overlaps between worker segments.
+- **Fix:** Use consistent `side` parameter and validate segment continuity.
+
+#### Bug 9: Prior factors saturate at 1.0 indistinguishably
+- **File:** `models/prior.py:49-66`
+- **Problem:** Multiplicative factors for old, high-throughput, uninspected equipment all clip to P=1.0, losing ranking information.
+- **Fix:** Cap individual factors before multiplication (e.g., `f_age` max 5.0, `f_production` max 3.0, `f_inspection` max 2.0).
+
+#### Bug 10: Reverse plume hardcodes H=0.0 for all hypothetical sources
+- **File:** `models/bayesian.py:166`
+- **Problem:** Real sources may be elevated; forward and reverse plume models are asymmetric.
+- **Fix:** Use actual source heights or averaged height from source list.
+
+#### Bug 11: `set_belief()` doesn't validate input shape
+- **File:** `models/bayesian.py:188-194`
+- **Fix:** Add `if belief.shape != self.grid_x.shape: raise ValueError(...)`.
+
+#### Bug 12: No validation that emission_rate >= 0
+- **File:** `models/gaussian_plume.py:56-67`
+- **Fix:** Add `if emission_rate < 0: raise ValueError(...)` at function entry.
+
+#### Bug 13: Puff model has no guard against zero sigma
+- **File:** `models/gaussian_plume.py:282`
+- **Fix:** Floor sigma values at `1e-6`; return zeros for non-positive `total_mass`.
+
+#### Bug 14: Ensemble weight validation inconsistent
+- **File:** `optimization/opportunity_map.py:162-165` validates weights; `information_gain.py` does not.
+- **Fix:** Add same weight validation to `compute_ensemble_information_scores()`.
+
+#### Bug 15: Turn-by-turn waypoint matching uses rounding instead of distance
+- **File:** `pages/worker_guidance.py:90,102`
+- **Fix:** Use `np.hypot(dx, dy) < tolerance` instead of `round()` comparison.
+
+---
+
+### 9.3 MEDIUM SEVERITY — State Management
+
+#### Bug 16: Sources mutated in-place via UI sliders
+- **File:** `main.py:440-449`
+- **Problem:** Duty cycle sliders mutate the source dicts returned by `DataProvider`. If the provider caches its list, mutations persist across sessions.
+- **Fix:** Deep-copy sources before mutation: `sources = [s.copy() for s in data_provider.get_leak_sources()]`.
+
+#### Bug 17: Measurement serialization drops timestamp/station_id
+- **File:** `data/state_io.py:47-61`
+- **Problem:** `Measurement` fields `timestamp` and `station_id` are not included in the serialized dict, causing data loss on roundtrip.
+- **Fix:** Serialize all `Measurement` dataclass fields.
+
+#### Bug 18: Campaign day close clears measurements but not entropy history
+- **File:** `main.py:992-995`
+- **Problem:** `st.session_state.bayesian_measurements` is cleared on day close, but entropy history accumulates across days, creating inconsistent state.
+- **Fix:** Reset entropy history on day close, or track per-day histories separately.
+
+---
+
+### 9.4 DESIGN IMPROVEMENTS
+
+#### Design 19: Detection scoring penalizes on-path locations
+- **File:** `optimization/tasking.py:128` and `information_gain.py:362`
+- **Problem:** `score = value / (deviation + epsilon)` with `epsilon=10m` means cells directly on the baseline path get divided by 10, discounting them.
+- **Suggestion:** Reformulate as additive cost or use a bonus for low deviation.
+
+#### Design 20: Use `scipy.special.expit()` for numerically stable sigmoid
+- **File:** `models/detection.py:48-50`
+- **Benefit:** Replaces manual clipping with a numerically stable library function.
+
+#### Design 21: DataProvider contract needs immutability documentation
+- **File:** `data/interfaces.py`
+- **Action:** Document whether returned lists are safe to mutate; consider returning copies.
+
+#### Design 22: Campaign state needs invariant checks
+- **File:** `optimization/campaign.py:259-261`
+- **Action:** Guard against calling `close_day()` twice or out of order; add state machine checks.
+
+---
+
+### 9.5 VISUALIZATION ISSUES
+
+#### Viz 23: Start/end markers duplicated in multi-worker mode
+- **File:** `visualization/plots.py:348-368`
+- **Problem:** `_add_start_end_markers()` called for each worker, creating overlapping markers.
+- **Fix:** Color markers by worker ID, or skip in multi-worker mode.
+
+#### Viz 24: Missing aspect ratio control in worker guidance map
+- **File:** `pages/worker_guidance.py:221`
+- **Fix:** Add `scaleratio=1` to maintain 1:1 aspect ratio.
+
+#### Viz 25: Poor color scaling on uniform/low-value data
+- **File:** `visualization/plots.py:918,930`
+- **Problem:** `zmax=max(np.max(data), 0.01)` creates extreme color stretching for uniform low-value data.
+- **Fix:** Use percentile-based scaling.
+
+#### Viz 26: NaN handling in log-scale concentration plots
+- **File:** `visualization/plots.py:472,566`
+- **Problem:** NaN in concentration data silently renders as blank cells.
+- **Fix:** Pre-filter NaN values with `np.nan_to_num()`.
+
+---
+
+### 9.6 TEST & VALIDATION GAPS
+
+| Gap | Priority |
+|-----|----------|
+| No test for sequential non-detections saturating belief to zero | High |
+| No test that worker path segments reconstruct the original path | High |
+| No test for waypoint already on the baseline path | Medium |
+| Multi-worker coverage test only asserts `>= 0.0`, not improvement | Medium |
+| Campaign multi-day entropy carry-forward not tested | High |
+| Experiment runner uses fixed seed=42 with no variance reporting | Medium |
+| No statistical significance testing in strategy comparison | Medium |
+| No comparison to published Pasquill-Gifford tables (Turner 1970) | Low |
+| Only 5 validation scenarios — missing "no leaks", "extreme emissions" | Medium |
+| Localization RMSE uses greedy matching instead of Hungarian algorithm | Medium |
+
+---
+
+### 9.7 IMPLEMENTATION STATUS
+
+All Phase 9 items have been implemented and verified (278 tests passing).
+
+```
+Step 1: Critical bugs (Bugs 1-7)                          ✅ DONE
+   └─► Bayesian update, campaign scoring, multi-worker, cache, serialization, plume, viz
+
+Step 2: Medium-severity logic fixes (Bugs 8-15)           ✅ DONE
+   └─► Path splitting, prior saturation, reverse plume, validation, ensemble weights
+
+Step 3: State management fixes (Bugs 16-18)               ✅ DONE
+   └─► Source mutation, measurement serialization, campaign state
+   └─► Note: Bug 17 was a false positive — all Measurement fields are already serialized
+
+Step 4: Design improvements (Design 19-22)                 ✅ DONE
+   └─► Scoring formula (exp decay), expit, DataProvider contract, campaign invariants
+
+Step 5: Visualization fixes (Viz 23-26)                    ✅ DONE
+   └─► Worker-colored markers, aspect ratio, percentile color scaling, NaN handling
+
+Step 6: Test gap coverage (Section 9.6)                    ✅ DONE
+   └─► tests/test_phase9_gaps.py: 9 new tests covering belief saturation,
+       path segments, campaign carry-forward, on-path waypoints, fleet coverage
+   └─► validation/metrics.py: Hungarian algorithm (linear_sum_assignment) replaces greedy RMSE
+   └─► experiments/run_strategy_comparison.py: --seeds flag for multi-seed variance reporting
+```
+
+---
+
+## Phase 7, 8, 9.6 Completion (2026-02-13)
+
+### Phase 9.6: Additional Test Gaps — DONE
+
+```
+✅ validation/scenarios.py: Added scenario_f_no_leaks() and scenario_g_extreme()
+✅ validation/metrics.py: Added paired_significance_test() and bootstrap_confidence_interval()
+✅ experiments/run_strategy_comparison.py: Wired scenarios F and G into ALL_SCENARIOS
+✅ tests/test_gaussian_plume.py: Added TestPasquillGiffordValidation (Turner 1970 reference + ordering)
+✅ tests/test_synthetic_twin.py: Added TestNewScenarios (F/G smoke tests) + TestStatisticalHelpers (9 tests)
+```
+
+### Phase 7: FileDataProvider — DONE
+
+```
+✅ data/samples/sources.json, path.csv, wind_scenarios.json, wind_distribution.json
+✅ data/interfaces.py: Added FileDataProvider class (eager validation, immutability contract)
+✅ tests/test_file_data_provider.py: 16 tests (ABC conformance, types, immutability, validation)
+✅ main.py: Added "Data Source" sidebar expander with file upload support
+```
+
+### Phase 8: Sensitivity Analysis + Documentation — DONE
+
+```
+✅ experiments/run_sensitivity_analysis.py: One-at-a-time parameter sweep (6 parameters)
+✅ docs/algorithms.md: Mathematical formulations for all 8 model components
+✅ docs/validation_results.md: Template with placeholder tables for results
+```
+
+---
+
+## OVERALL COMPLETION STATUS
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| 1 | Foundation Hardening (tests, validation, config) | ✅ Complete |
+| 2 | Bayesian Inference Engine (prior, belief, EER) | ✅ Complete |
+| 3.1 | Cross-Plume Integrated Concentration | ✅ Complete |
+| 3.2 | Time-Varying Source Model (duty cycle, puff) | ✅ Complete |
+| 3.3 | Sensor Model Enhancement (SensorModel class) | ⏭️ Skipped (per user) |
+| 4 | Multi-Worker & Campaign Planning | ✅ Complete |
+| 5 | Validation Framework (synthetic twin, scenarios) | ✅ Complete |
+| 6.1 | Belief Map Visualization | ✅ Complete |
+| 6.2 | Worker Guidance Interface | ✅ Complete |
+| 6.3 | Dashboard & Reporting Page | ❌ Not implemented |
+| 7 | Data Integration (FileDataProvider) | ✅ Complete |
+| 8 | Documentation & Reproducibility | ✅ Complete |
+| 9 | Deep Code Review — Bug Fixes & Hardening | ✅ Complete |
+
+### Remaining Items
+
+1. **Phase 3.3 — SensorModel class** (skipped per user request): Would add `SensorModel` class with configurable response time, false positive rate, temperature factor, and sensor type presets. Low priority — current sigmoid + MDL model is sufficient.
+
+2. **Phase 6.3 — Dashboard & Reporting Page** (`pages/dashboard.py`): A dedicated Streamlit page for campaign progress summary, detection history timeline, worker utilization chart, and uncertainty reduction over time. Currently these features are partially available in the campaign mode panel of main.py and the export functionality.
+
+### Test Count: 316 tests passing

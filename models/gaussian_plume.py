@@ -50,6 +50,10 @@ def compute_sigma(distance_downwind: np.ndarray, stability_class: str):
     sigma_y = a_y * np.power(x_safe, b_y)
     sigma_z = a_z * np.power(x_safe, b_z)
 
+    # Floor sigma to prevent division-by-zero / infinite concentrations at close range
+    sigma_y = np.maximum(sigma_y, 0.01)
+    sigma_z = np.maximum(sigma_z, 0.01)
+
     return sigma_y, sigma_z
 
 
@@ -88,6 +92,8 @@ def gaussian_plume(
     """
     if wind_speed <= 0:
         raise ValueError("Wind speed must be positive.")
+    if emission_rate < 0:
+        raise ValueError("Emission rate must be non-negative.")
 
     # Convert meteorological direction to the direction wind is blowing TOWARD
     # Met convention: 270 means wind FROM the west, blowing toward east (+x)
@@ -171,6 +177,8 @@ def crosswind_integrated_plume(
     """
     if wind_speed <= 0:
         raise ValueError("Wind speed must be positive.")
+    if emission_rate < 0:
+        raise ValueError("Emission rate must be non-negative.")
 
     wind_toward_deg = (wind_direction_deg + 180.0) % 360.0
     wind_toward_rad = np.radians(wind_toward_deg)
@@ -252,6 +260,8 @@ def gaussian_puff(
         raise ValueError("Time since release must be positive.")
     if total_mass < 0:
         raise ValueError("Total mass must be non-negative.")
+    if total_mass == 0:
+        return np.zeros_like(receptor_x, dtype=float)
 
     # Travel distance for dispersion parameters
     travel_distance = wind_speed * time_since_release

@@ -84,10 +84,9 @@ def generate_turn_by_turn(
     directions = []
     cum_dist = 0.0
 
-    # Create a set of recommendation coords for matching
-    rec_coords = set()
-    for r in recommendations:
-        rec_coords.add((round(r["x"], 1), round(r["y"], 1)))
+    # Collect recommendation coordinates for distance-based matching
+    rec_xy = np.array([[r["x"], r["y"]] for r in recommendations]) if recommendations else np.empty((0, 2))
+    match_tolerance = 5.0  # meters
 
     for i in range(len(optimized_path) - 1):
         start = optimized_path[i]
@@ -99,7 +98,11 @@ def generate_turn_by_turn(
         bearing = _bearing_deg(dx, dy)
         cardinal = _bearing_to_cardinal(bearing)
 
-        is_wp = (round(end[0], 1), round(end[1], 1)) in rec_coords
+        # Use distance-based matching instead of rounding
+        is_wp = False
+        if len(rec_xy) > 0:
+            dists_to_recs = np.hypot(rec_xy[:, 0] - end[0], rec_xy[:, 1] - end[1])
+            is_wp = bool(np.any(dists_to_recs < match_tolerance))
 
         instruction = f"Walk {cardinal} for {dist:.0f}m"
         if is_wp:
@@ -218,7 +221,7 @@ def render_simplified_map(
         legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
         margin=dict(l=40, r=40, t=30, b=60),
     )
-    fig.update_xaxes(title_text="East (m)", scaleanchor="y")
+    fig.update_xaxes(title_text="East (m)", scaleanchor="y", scaleratio=1)
     fig.update_yaxes(title_text="North (m)")
 
     return fig

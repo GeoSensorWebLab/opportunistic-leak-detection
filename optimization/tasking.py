@@ -5,7 +5,7 @@ Given a worker's baseline path and a detection probability map,
 recommends optimal waypoints that maximize detection probability
 while minimizing deviation from the planned route.
 
-Score = DetectionProbability / (PathDeviationCost + epsilon)
+Score = DetectionValue * exp(-Deviation / DeviationScale)
 """
 
 import numpy as np
@@ -15,6 +15,7 @@ from scipy.spatial.distance import cdist
 
 from config import (
     DEVIATION_EPSILON,
+    DEVIATION_SCALE_M,
     MAX_DEVIATION_M,
     TOP_K_RECOMMENDATIONS,
     MIN_WAYPOINT_SEPARATION_M,
@@ -89,16 +90,16 @@ def compute_tasking_scores(
     max_deviation: float = MAX_DEVIATION_M,
     precomputed_deviation: Optional[np.ndarray] = None,
     prior_weight: Optional[np.ndarray] = None,
+    deviation_scale: float = DEVIATION_SCALE_M,
 ) -> np.ndarray:
     """
     Compute the tasking score for each grid cell.
 
-    Without prior:  Score = P_detection / (Deviation + epsilon)
-    With prior:     Score = Prior * P_detection / (Deviation + epsilon)
+    Without prior:  Score = P_detection * exp(-Deviation / scale)
+    With prior:     Score = Prior * P_detection * exp(-Deviation / scale)
 
-    The prior weight biases recommendations toward locations where
-    leaks are more likely based on equipment attributes (age, type,
-    production rate, inspection recency).
+    Uses an exponential decay so on-path cells receive full detection
+    value while distant cells are smoothly penalized.
 
     Cells beyond max_deviation are scored 0 (not worth visiting).
 
@@ -106,12 +107,13 @@ def compute_tasking_scores(
         grid_x, grid_y: 2D meshgrid arrays.
         detection_prob: 2D array of detection probabilities [0, 1].
         baseline_path: (N, 2) array of worker's planned waypoints.
-        epsilon: Small constant to prevent division by zero (meters).
+        epsilon: Legacy parameter (unused, kept for API compatibility).
         max_deviation: Maximum allowable deviation from path (meters).
         precomputed_deviation: Optional pre-cached deviation grid to skip cdist.
         prior_weight: Optional 2D array of prior leak probabilities [0, 1].
                       When provided, multiplies the detection probability
                       to bias scores toward higher-risk locations.
+        deviation_scale: Exponential decay scale in meters (default 50m).
 
     Returns:
         scores: 2D array of tasking scores (same shape as grid_x).
@@ -125,7 +127,7 @@ def compute_tasking_scores(
     if prior_weight is not None:
         effective_detection = prior_weight * detection_prob
 
-    scores = effective_detection / (deviation + epsilon)
+    scores = effective_detection * np.exp(-deviation / deviation_scale)
 
     # Zero out cells that are too far from the path
     scores[deviation > max_deviation] = 0.0

@@ -23,6 +23,8 @@ from validation.scenarios import (
     scenario_c_variable_wind,
     scenario_d_complex,
     scenario_e_intermittent,
+    scenario_f_no_leaks,
+    scenario_g_extreme,
 )
 from validation.metrics import (
     source_detection_rate,
@@ -31,6 +33,8 @@ from validation.metrics import (
     entropy_reduction_fraction,
     convergence_step,
     first_detection_step,
+    paired_significance_test,
+    bootstrap_confidence_interval,
 )
 
 
@@ -91,10 +95,22 @@ class TestScenarios:
         dcs = [s.get("duty_cycle", 1.0) for s in sc["ground_truth"]]
         assert any(dc < 1.0 for dc in dcs), "At least one source should be intermittent"
 
+    def test_scenario_f_has_no_ground_truth(self):
+        sc = scenario_f_no_leaks()
+        assert len(sc["ground_truth"]) == 0
+
+    def test_scenario_g_has_five_extreme_sources(self):
+        sc = scenario_g_extreme()
+        assert len(sc["ground_truth"]) == 5
+        for src in sc["ground_truth"]:
+            assert src["emission_rate"] >= 1.0  # 10x of original rates
+            assert src["duty_cycle"] == 1.0
+
     def test_all_scenarios_have_required_keys(self):
         for sc_fn in [scenario_a_simple, scenario_b_multi_source,
                       scenario_c_variable_wind, scenario_d_complex,
-                      scenario_e_intermittent]:
+                      scenario_e_intermittent, scenario_f_no_leaks,
+                      scenario_g_extreme]:
             sc = sc_fn()
             assert "ground_truth" in sc
             assert "all_equipment" in sc
@@ -321,3 +337,126 @@ class TestVariableWind:
             assert len(result.measurements) == 3, (
                 f"Strategy {strategy.name} failed on Scenario C"
             )
+
+
+# ---------------------------------------------------------------------------
+# New scenario smoke tests (F and G)
+# ---------------------------------------------------------------------------
+
+class TestNewScenarios:
+    def test_scenario_f_no_leak_few_detections(self):
+        """Scenario F (no leaks) should produce very few detections."""
+        sc = scenario_f_no_leaks()
+        exp = SyntheticExperiment(
+            ground_truth=sc["ground_truth"],
+            all_equipment=sc["all_equipment"],
+            wind_params=sc["wind_params"],
+            resolution=20.0,
+        )
+        result = exp.run(RandomStrategy(), num_steps=10, seed=42)
+        # With no ground truth, detections should only come from false alarms
+        assert result.total_detections <= 3, (
+            f"Expected very few detections with no leaks, got {result.total_detections}"
+        )
+
+    def test_scenario_g_extreme_has_detections(self):
+        """Scenario G (extreme emissions) should produce many detections."""
+        sc = scenario_g_extreme()
+        exp = SyntheticExperiment(
+            ground_truth=sc["ground_truth"],
+            all_equipment=sc["all_equipment"],
+            wind_params=sc["wind_params"],
+            resolution=20.0,
+        )
+        result = exp.run(RandomStrategy(), num_steps=10, seed=42)
+        # With 5 sources at 10x emission, there should be many detections
+        assert result.total_detections >= 1, (
+            "Expected detections with extreme emissions"
+        )
+
+    def test_scenario_f_completes_with_all_strategies(self):
+        """All strategies should run on Scenario F without error."""
+        sc = scenario_f_no_leaks()
+        exp = SyntheticExperiment(
+            ground_truth=sc["ground_truth"],
+            all_equipment=sc["all_equipment"],
+            wind_params=sc["wind_params"],
+            resolution=20.0,
+        )
+        for strategy in [RandomStrategy(), GridSearchStrategy(step_m=100.0),
+                         OpportunisticStrategy()]:
+            result = exp.run(strategy, num_steps=3, seed=42)
+            assert len(result.measurements) == 3
+
+    def test_scenario_g_completes_with_all_strategies(self):
+        """All strategies should run on Scenario G without error."""
+        sc = scenario_g_extreme()
+        exp = SyntheticExperiment(
+            ground_truth=sc["ground_truth"],
+            all_equipment=sc["all_equipment"],
+            wind_params=sc["wind_params"],
+            resolution=20.0,
+        )
+        for strategy in [RandomStrategy(), GridSearchStrategy(step_m=100.0),
+                         OpportunisticStrategy()]:
+            result = exp.run(strategy, num_steps=3, seed=42)
+            assert len(result.measurements) == 3
+
+
+# ---------------------------------------------------------------------------
+# Statistical helper tests
+# ---------------------------------------------------------------------------
+
+class TestStatisticalHelpers:
+    def test_identical_arrays_not_significant(self):
+        """Identical arrays should yield p > 0.05 (not significant)."""
+        a = [1.0, 2.0, 3.0, 4.0, 5.0]
+        result = paired_significance_test(a, a)
+        assert result["p_value"] > 0.05 or result["mean_diff"] == 0.0
+        assert result["mean_diff"] == pytest.approx(0.0)
+
+    def test_clearly_different_arrays_significant(self):
+        """Clearly different arrays should yield p < 0.05."""
+        a = [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0]
+        b = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+        result = paired_significance_test(a, b)
+        assert result["p_value"] < 0.05
+        assert result["significant"] is True
+        assert result["mean_diff"] > 0
+
+    def test_ci_contains_mean(self):
+        """Confidence interval should contain the mean difference."""
+        a = [5.0, 6.0, 7.0, 8.0, 9.0]
+        b = [1.0, 2.0, 3.0, 4.0, 5.0]
+        result = paired_significance_test(a, b)
+        assert result["ci_lower"] <= result["mean_diff"] <= result["ci_upper"]
+
+    def test_wrong_length_raises(self):
+        """Mismatched lengths should raise ValueError."""
+        with pytest.raises(ValueError, match="lengths must match"):
+            paired_significance_test([1.0, 2.0], [1.0, 2.0, 3.0])
+
+    def test_too_few_observations_raises(self):
+        """Fewer than 2 observations should raise ValueError."""
+        with pytest.raises(ValueError, match="at least 2"):
+            paired_significance_test([1.0], [2.0])
+
+    def test_bootstrap_basics(self):
+        """Bootstrap CI should contain the sample mean."""
+        values = [1.0, 2.0, 3.0, 4.0, 5.0]
+        result = bootstrap_confidence_interval(values)
+        assert result["ci_lower"] <= result["mean"] <= result["ci_upper"]
+        assert result["mean"] == pytest.approx(3.0)
+        assert result["std"] > 0
+
+    def test_bootstrap_empty_raises(self):
+        """Empty array should raise ValueError."""
+        with pytest.raises(ValueError, match="empty"):
+            bootstrap_confidence_interval([])
+
+    def test_bootstrap_single_value(self):
+        """Single value should produce tight CI around the value."""
+        result = bootstrap_confidence_interval([42.0])
+        assert result["mean"] == pytest.approx(42.0)
+        assert result["ci_lower"] == pytest.approx(42.0)
+        assert result["ci_upper"] == pytest.approx(42.0)

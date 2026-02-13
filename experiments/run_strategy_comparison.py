@@ -3,11 +3,13 @@
 Strategy Comparison Benchmark.
 
 Runs all routing strategies on all synthetic scenarios and produces
-a comparison table with key performance metrics.
+a comparison table with key performance metrics.  Supports multiple
+seeds for variance reporting (mean +/- std).
 
 Usage:
     uv run python experiments/run_strategy_comparison.py
     uv run python experiments/run_strategy_comparison.py --steps 30 --seed 123
+    uv run python experiments/run_strategy_comparison.py --seeds 42 123 456 --steps 20
 """
 
 import sys
@@ -34,6 +36,8 @@ from validation.scenarios import (
     scenario_c_variable_wind,
     scenario_d_complex,
     scenario_e_intermittent,
+    scenario_f_no_leaks,
+    scenario_g_extreme,
 )
 from validation.metrics import (
     source_detection_rate,
@@ -51,6 +55,8 @@ ALL_SCENARIOS = {
     "C (variable wind)": scenario_c_variable_wind,
     "D (complex)": scenario_d_complex,
     "E (intermittent)": scenario_e_intermittent,
+    "F (no leaks)": scenario_f_no_leaks,
+    "G (extreme)": scenario_g_extreme,
 }
 
 
@@ -160,6 +166,55 @@ def run_comparison(
     return all_rows
 
 
+def run_multi_seed(
+    seeds: list,
+    num_steps: int = 20,
+    resolution: float = 20.0,
+    verbose: bool = True,
+):
+    """Run the benchmark across multiple seeds and aggregate statistics.
+
+    Args:
+        seeds: List of random seeds.
+        num_steps: Steps per experiment.
+        resolution: Grid resolution in meters.
+        verbose: Print per-seed output.
+
+    Returns:
+        Dict mapping (scenario, strategy) -> dict of metric lists.
+    """
+    aggregated = {}  # (scenario, strategy) -> {metric_name: [values]}
+
+    for i, seed in enumerate(seeds):
+        if verbose:
+            print(f"\n{'#'*70}")
+            print(f"  SEED {seed} ({i+1}/{len(seeds)})")
+            print(f"{'#'*70}")
+
+        rows = run_comparison(
+            num_steps=num_steps,
+            resolution=resolution,
+            seed=seed,
+            verbose=verbose,
+        )
+
+        for row in rows:
+            key = (row["scenario"], row["strategy"])
+            if key not in aggregated:
+                aggregated[key] = {
+                    "entropy_reduction_pct": [],
+                    "localization_rmse_m": [],
+                    "source_detection_rate": [],
+                    "info_efficiency_bits_per_m": [],
+                    "total_detections": [],
+                    "total_distance_m": [],
+                }
+            for metric in aggregated[key]:
+                aggregated[key][metric].append(row[metric])
+
+    return aggregated
+
+
 def print_summary(rows):
     """Print a cross-scenario summary ranking strategies."""
     strategy_names = sorted(set(r["strategy"] for r in rows))
@@ -190,26 +245,117 @@ def print_summary(rows):
         )
 
 
+def print_multi_seed_summary(aggregated: dict):
+    """Print mean +/- std across seeds for each (scenario, strategy)."""
+    print(f"\n\n{'='*80}")
+    print("MULTI-SEED SUMMARY: mean +/- std across seeds")
+    print(f"{'='*80}")
+
+    # Group by strategy across all scenarios
+    strategy_agg = {}
+    for (sc_name, strat_name), metrics in aggregated.items():
+        if strat_name not in strategy_agg:
+            strategy_agg[strat_name] = {
+                "entropy_reduction_pct": [],
+                "localization_rmse_m": [],
+                "source_detection_rate": [],
+                "info_efficiency_bits_per_m": [],
+            }
+        for metric in strategy_agg[strat_name]:
+            strategy_agg[strat_name][metric].extend(metrics[metric])
+
+    print(f"\n  {'Strategy':<20} {'Ent % (mean±std)':>20} {'RMSE (mean±std)':>20} "
+          f"{'DetRate (mean±std)':>22} {'Eff (mean±std)':>20}")
+    print(f"  {'-'*20} {'-'*20} {'-'*20} {'-'*22} {'-'*20}")
+
+    summaries = []
+    for name, metrics in strategy_agg.items():
+        ent_vals = metrics["entropy_reduction_pct"]
+        rmse_vals = metrics["localization_rmse_m"]
+        det_vals = metrics["source_detection_rate"]
+        eff_vals = metrics["info_efficiency_bits_per_m"]
+        summaries.append((
+            name,
+            np.mean(ent_vals), np.std(ent_vals),
+            np.mean(rmse_vals), np.std(rmse_vals),
+            np.mean(det_vals), np.std(det_vals),
+            np.mean(eff_vals), np.std(eff_vals),
+        ))
+
+    summaries.sort(key=lambda x: x[1], reverse=True)
+
+    for (name, ent_m, ent_s, rmse_m, rmse_s, det_m, det_s, eff_m, eff_s) in summaries:
+        print(
+            f"  {name:<20} "
+            f"{ent_m:>8.1f}% ± {ent_s:>5.1f}  "
+            f"{rmse_m:>8.1f} ± {rmse_s:>5.1f}  "
+            f"{100*det_m:>8.0f}% ± {100*det_s:>4.0f}%  "
+            f"{eff_m:>8.4f} ± {eff_s:>.4f}"
+        )
+
+    # Per-scenario breakdown
+    scenarios = sorted(set(sc for sc, _ in aggregated.keys()))
+    for sc_name in scenarios:
+        print(f"\n  --- {sc_name} ---")
+        print(f"  {'Strategy':<20} {'Ent %':>16} {'RMSE':>16} {'DetRate':>16}")
+
+        for strat_name in sorted(set(s for _, s in aggregated.keys())):
+            key = (sc_name, strat_name)
+            if key not in aggregated:
+                continue
+            m = aggregated[key]
+            ent = m["entropy_reduction_pct"]
+            rmse = m["localization_rmse_m"]
+            det = m["source_detection_rate"]
+            print(
+                f"  {strat_name:<20} "
+                f"{np.mean(ent):>6.1f} ± {np.std(ent):>4.1f}  "
+                f"{np.mean(rmse):>6.1f} ± {np.std(rmse):>4.1f}  "
+                f"{100*np.mean(det):>5.0f}% ± {100*np.std(det):>3.0f}%"
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Strategy Comparison Benchmark")
     parser.add_argument("--steps", type=int, default=20, help="Steps per experiment")
     parser.add_argument("--resolution", type=float, default=20.0, help="Grid resolution (m)")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed (single-seed mode)")
+    parser.add_argument("--seeds", type=int, nargs="+", default=None,
+                        help="Multiple seeds for variance reporting (e.g., --seeds 42 123 456)")
     parser.add_argument("--quiet", action="store_true", help="Suppress per-scenario output")
     args = parser.parse_args()
 
-    print("Strategy Comparison Benchmark")
-    print(f"Steps: {args.steps}, Resolution: {args.resolution}m, Seed: {args.seed}")
+    if args.seeds and len(args.seeds) > 1:
+        # Multi-seed mode
+        print("Strategy Comparison Benchmark (Multi-Seed)")
+        print(f"Steps: {args.steps}, Resolution: {args.resolution}m, "
+              f"Seeds: {args.seeds}")
 
-    rows = run_comparison(
-        num_steps=args.steps,
-        resolution=args.resolution,
-        seed=args.seed,
-        verbose=not args.quiet,
-    )
-    print_summary(rows)
+        aggregated = run_multi_seed(
+            seeds=args.seeds,
+            num_steps=args.steps,
+            resolution=args.resolution,
+            verbose=not args.quiet,
+        )
+        print_multi_seed_summary(aggregated)
 
-    print(f"\nTotal: {len(rows)} experiment runs completed.")
+        total_runs = len(aggregated) * len(args.seeds)
+        print(f"\nTotal: {total_runs} experiment runs across {len(args.seeds)} seeds.")
+    else:
+        # Single-seed mode (original behavior)
+        seed = args.seeds[0] if args.seeds else args.seed
+        print("Strategy Comparison Benchmark")
+        print(f"Steps: {args.steps}, Resolution: {args.resolution}m, Seed: {seed}")
+
+        rows = run_comparison(
+            num_steps=args.steps,
+            resolution=args.resolution,
+            seed=seed,
+            verbose=not args.quiet,
+        )
+        print_summary(rows)
+
+        print(f"\nTotal: {len(rows)} experiment runs completed.")
 
 
 if __name__ == "__main__":

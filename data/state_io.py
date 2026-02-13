@@ -101,14 +101,14 @@ def deserialize_state(data: bytes) -> dict:
         result["entropy_history"] = npz["entropy_history"].tolist()
 
     if "measurements_json" in npz:
-        meas_json = str(npz["measurements_json"])
+        meas_json = npz["measurements_json"].item()
         meas_dicts = json.loads(meas_json)
         result["measurements"] = [
             Measurement(**md) for md in meas_dicts
         ]
 
     if "metadata_json" in npz:
-        meta_json = str(npz["metadata_json"])
+        meta_json = npz["metadata_json"].item()
         result["metadata"] = json.loads(meta_json)
 
     return result

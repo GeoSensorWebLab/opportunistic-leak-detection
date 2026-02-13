@@ -67,11 +67,9 @@ def split_baseline_path(
         start_dist = w * total_dist / num_workers
         end_dist = (w + 1) * total_dist / num_workers
 
-        # Find indices bounding this segment
-        start_idx = int(np.searchsorted(cum_dist, start_dist, side="right")) - 1
-        end_idx = int(np.searchsorted(cum_dist, end_dist, side="left"))
-        start_idx = max(0, start_idx)
-        end_idx = min(n - 1, end_idx)
+        # Find indices bounding this segment (use consistent side="right" for both)
+        start_idx = max(0, int(np.searchsorted(cum_dist, start_dist, side="right")) - 1)
+        end_idx = min(n - 1, int(np.searchsorted(cum_dist, end_dist, side="right")))
 
         segment = baseline_path[start_idx:end_idx + 1].copy()
         if len(segment) < 2:
@@ -108,7 +106,7 @@ def allocate_waypoints(
 
     for rec in recommendations:
         pt = np.array([[rec["x"], rec["y"]]])
-        best_worker = 0
+        best_worker = -1
         best_dist = float("inf")
 
         for i, path in enumerate(worker_paths):
@@ -118,7 +116,9 @@ def allocate_waypoints(
                 best_dist = min_d
                 best_worker = i
 
-        routes[best_worker].assigned_waypoints.append(rec)
+        # Only assign if the waypoint is within max_deviation of some worker
+        if best_worker >= 0 and best_dist <= max_deviation:
+            routes[best_worker].assigned_waypoints.append(rec)
 
     for route in routes:
         route.build_path()

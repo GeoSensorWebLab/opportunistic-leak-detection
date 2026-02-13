@@ -132,3 +132,47 @@ def scenario_e_intermittent() -> dict:
         },
         "description": "Two intermittent sources (C dc=0.3, B dc=0.9), steady west wind",
     }
+
+
+def scenario_f_no_leaks() -> dict:
+    """Scenario F: No active leaks, steady wind.
+
+    Null hypothesis test — all equipment is present but nothing is
+    actually leaking.  The belief map should stay low everywhere and
+    the system should produce very few false-alarm detections.
+    """
+    equipment = _all_equipment()
+    return {
+        "ground_truth": [],
+        "all_equipment": equipment,
+        "wind_params": {
+            "wind_speed": 3.0,
+            "wind_direction_deg": 270.0,
+            "stability_class": "D",
+        },
+        "description": "No active leaks, steady west wind (null hypothesis)",
+    }
+
+
+def scenario_g_extreme() -> dict:
+    """Scenario G: All 5 sources at 10x emission rate, steady wind.
+
+    Saturation stress test — every source is leaking at extreme rates
+    with continuous duty cycles.  The system should still localise
+    individual sources despite high background concentrations.
+    """
+    equipment = _all_equipment()
+    ground_truth = [
+        dict(src, emission_rate=src["emission_rate"] * 10.0, duty_cycle=1.0)
+        for src in equipment
+    ]
+    return {
+        "ground_truth": ground_truth,
+        "all_equipment": equipment,
+        "wind_params": {
+            "wind_speed": 3.0,
+            "wind_direction_deg": 270.0,
+            "stability_class": "D",
+        },
+        "description": "All 5 sources at 10x emission rate, steady west wind (saturation)",
+    }

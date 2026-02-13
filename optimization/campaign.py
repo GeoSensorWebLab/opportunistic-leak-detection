@@ -19,7 +19,7 @@ from optimization.tasking import (
     cached_path_deviation,
     recommend_waypoints,
 )
-from optimization.information_gain import compute_total_entropy
+from optimization.information_gain import compute_total_entropy, compute_information_scores
 from config import (
     GRID_SIZE_M,
     GRID_RESOLUTION_M,
@@ -195,16 +195,33 @@ def plan_next_day(
     deviation = compute_path_deviation(campaign.grid_x, campaign.grid_y, baseline_path)
 
     # Compute scores using accumulated posterior
-    scores = compute_tasking_scores(
-        grid_x=campaign.grid_x,
-        grid_y=campaign.grid_y,
-        detection_prob=detection_prob,
-        baseline_path=baseline_path,
-        epsilon=DEVIATION_EPSILON,
-        max_deviation=max_deviation,
-        precomputed_deviation=deviation,
-        prior_weight=starting_belief,
-    )
+    if scoring_mode == "eer":
+        avg_emission = float(np.mean(
+            [s["emission_rate"] * s.get("duty_cycle", 1.0) for s in sources]
+        )) if sources else 0.5
+        scores = compute_information_scores(
+            grid_x=campaign.grid_x,
+            grid_y=campaign.grid_y,
+            belief=starting_belief,
+            deviation=deviation,
+            max_deviation=max_deviation,
+            wind_speed=wind_params["wind_speed"],
+            wind_direction_deg=wind_params["wind_direction_deg"],
+            stability_class=wind_params["stability_class"],
+            avg_emission=avg_emission,
+            epsilon=DEVIATION_EPSILON,
+        )
+    else:
+        scores = compute_tasking_scores(
+            grid_x=campaign.grid_x,
+            grid_y=campaign.grid_y,
+            detection_prob=detection_prob,
+            baseline_path=baseline_path,
+            epsilon=DEVIATION_EPSILON,
+            max_deviation=max_deviation,
+            precomputed_deviation=deviation,
+            prior_weight=starting_belief,
+        )
 
     recommendations = recommend_waypoints(
         grid_x=campaign.grid_x,
@@ -239,6 +256,12 @@ def close_day(
         measurements: Measurements collected during the day.
         sources: List of source dicts.
     """
+    # Guard against calling close_day on an already-closed plan
+    if day_plan.ending_belief is not None:
+        raise RuntimeError(
+            f"Day {day_plan.day_index} has already been closed."
+        )
+
     day_plan.measurements = measurements
 
     # Run Bayesian updates from the day's starting belief

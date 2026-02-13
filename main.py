@@ -15,7 +15,7 @@ import streamlit.components.v1 as components
 import numpy as np
 import pandas as pd
 
-from data.interfaces import MockDataProvider
+from data.interfaces import MockDataProvider, FileDataProvider
 from data.facility_layout import get_facility_layout
 from optimization.opportunity_map import (
     cached_opportunity_map,
@@ -65,7 +65,9 @@ from config import (
 )
 
 # ── Data Provider ────────────────────────────────────────────────────────────
-data_provider = MockDataProvider()
+if "data_provider" not in st.session_state:
+    st.session_state.data_provider = MockDataProvider()
+data_provider = st.session_state.data_provider
 
 # ── Page Config ──────────────────────────────────────────────────────────────
 
@@ -137,6 +139,47 @@ _inject_custom_css()
 
 # ── Sidebar Controls ──────────────────────────────────────────────────────────
 # (Header rendered after sidebar so we can show active config badges)
+
+with st.sidebar.expander("Data Source", expanded=False):
+    data_source_mode = st.radio(
+        "Source",
+        ["Mock (built-in)", "Load from files"],
+        key="data_source_mode",
+    )
+    if data_source_mode == "Load from files":
+        import tempfile
+        uploaded_sources = st.file_uploader("Sources JSON", type=["json"], key="up_src")
+        uploaded_path = st.file_uploader("Path CSV", type=["csv"], key="up_path")
+        uploaded_wind = st.file_uploader("Wind Scenarios JSON", type=["json"], key="up_wind")
+
+        if uploaded_sources and uploaded_path and uploaded_wind:
+            try:
+                tmp_dir = tempfile.mkdtemp()
+                src_path = os.path.join(tmp_dir, "sources.json")
+                path_path = os.path.join(tmp_dir, "path.csv")
+                wind_path = os.path.join(tmp_dir, "wind_scenarios.json")
+                with open(src_path, "wb") as f:
+                    f.write(uploaded_sources.getvalue())
+                with open(path_path, "wb") as f:
+                    f.write(uploaded_path.getvalue())
+                with open(wind_path, "wb") as f:
+                    f.write(uploaded_wind.getvalue())
+                new_provider = FileDataProvider(
+                    sources_path=src_path,
+                    path_path=path_path,
+                    wind_scenarios_path=wind_path,
+                )
+                st.session_state.data_provider = new_provider
+                data_provider = new_provider
+                st.success("Loaded custom data files.")
+            except Exception as e:
+                st.error(f"Failed to load files: {e}")
+        else:
+            st.caption("Upload all 3 files to switch data source.")
+    else:
+        if not isinstance(st.session_state.data_provider, MockDataProvider):
+            st.session_state.data_provider = MockDataProvider()
+            data_provider = st.session_state.data_provider
 
 with st.sidebar.expander("Wind Conditions", expanded=True):
     # Preset scenarios
@@ -426,7 +469,7 @@ with st.sidebar.expander("Prior & Bayesian", expanded=False):
 
 # ── Data ─────────────────────────────────────────────────────────────────────
 
-sources = data_provider.get_leak_sources()
+sources = [s.copy() for s in data_provider.get_leak_sources()]
 baseline_path = data_provider.get_baseline_path()
 facility_layout = get_facility_layout()
 
@@ -992,6 +1035,7 @@ if use_campaign:
                     day_measurements = st.session_state.get("bayesian_measurements", [])
                     close_day(camp, active_plan, day_measurements, sources)
                     st.session_state.bayesian_measurements = []
+                    st.session_state.entropy_history = []
                     del st.session_state["_active_day_plan"]
                     st.success(f"Day {active_plan.day_index + 1} closed with {len(day_measurements)} measurements")
                 else:

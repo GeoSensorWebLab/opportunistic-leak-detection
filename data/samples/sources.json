@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Wellhead A",
+    "x": -260.0,
+    "y": 130.0,
+    "z": 0.0,
+    "emission_rate": 0.3,
+    "equipment_type": "wellhead",
+    "age_years": 22,
+    "production_rate_mcfd": 850.0,
+    "last_inspection_days": 120,
+    "duty_cycle": 0.7
+  },
+  {
+    "name": "Compressor Station B",
+    "x": 75.0,
+    "y": -140.0,
+    "z": 2.0,
+    "emission_rate": 0.8,
+    "equipment_type": "compressor",
+    "age_years": 8,
+    "production_rate_mcfd": 5200.0,
+    "last_inspection_days": 45,
+    "duty_cycle": 0.95
+  },
+  {
+    "name": "Pipeline Junction C",
+    "x": 280.0,
+    "y": -30.0,
+    "z": 0.0,
+    "emission_rate": 0.15,
+    "equipment_type": "pipeline_junction",
+    "age_years": 15,
+    "production_rate_mcfd": 3100.0,
+    "last_inspection_days": 200,
+    "duty_cycle": 0.3
+  },
+  {
+    "name": "Storage Tank D",
+    "x": -110.0,
+    "y": -270.0,
+    "z": 3.0,
+    "emission_rate": 1.2,
+    "equipment_type": "storage_tank",
+    "age_years": 30,
+    "production_rate_mcfd": 0.0,
+    "last_inspection_days": 90,
+    "duty_cycle": 1.0
+  },
+  {
+    "name": "Valve Cluster E",
+    "x": 270.0,
+    "y": -60.0,
+    "z": 0.5,
+    "emission_rate": 0.4,
+    "equipment_type": "valve",
+    "age_years": 12,
+    "production_rate_mcfd": 2400.0,
+    "last_inspection_days": 60,
+    "duty_cycle": 0.6
+  }
+]

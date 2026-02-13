@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Light SW Breeze (Unstable)",
+    "speed": 2.0,
+    "direction": 225,
+    "stability_class": "A"
+  },
+  {
+    "name": "Moderate West Wind (Neutral)",
+    "speed": 4.0,
+    "direction": 270,
+    "stability_class": "D"
+  },
+  {
+    "name": "Strong North Wind (Stable)",
+    "speed": 8.0,
+    "direction": 0,
+    "stability_class": "F"
+  },
+  {
+    "name": "East Wind (Slightly Unstable)",
+    "speed": 3.0,
+    "direction": 90,
+    "stability_class": "B"
+  }
+]

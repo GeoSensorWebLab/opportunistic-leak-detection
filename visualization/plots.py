@@ -266,7 +266,6 @@ def _add_detour_highlights(
 _WORKER_COLORS = ["#00b4d8", "#ff6b6b", "#51cf66", "#fcc419", "#cc5de8"]
 
 
-@st.cache_data(max_entries=CACHE_MAX_ENTRIES)
 def create_single_map_figure(
     grid_x: np.ndarray,
     grid_y: np.ndarray,
@@ -365,7 +364,32 @@ def create_single_map_figure(
                 row=1, col=1,
             )
             _add_path_arrows(fig, wpath, wcolor, row=1, col=1)
-            _add_start_end_markers(fig, wpath, row=1, col=1)
+            # Worker-colored start/end markers (avoid duplicate generic markers)
+            wlabel = f"W{route.worker_id + 1}"
+            fig.add_trace(
+                go.Scatter(
+                    x=[wpath[0, 0]], y=[wpath[0, 1]],
+                    mode="markers+text",
+                    marker=dict(size=12, color=wcolor, symbol="circle",
+                                line=dict(width=2, color="white")),
+                    text=[wlabel], textposition="middle right",
+                    textfont=dict(size=9, color=wcolor),
+                    showlegend=False,
+                    hovertemplate=f"{wlabel} START<br>(%{{x:.0f}}, %{{y:.0f}})<extra></extra>",
+                ),
+                row=1, col=1,
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[wpath[-1, 0]], y=[wpath[-1, 1]],
+                    mode="markers",
+                    marker=dict(size=12, color=wcolor, symbol="square",
+                                line=dict(width=2, color="white")),
+                    showlegend=False,
+                    hovertemplate=f"{wlabel} END<br>(%{{x:.0f}}, %{{y:.0f}})<extra></extra>",
+                ),
+                row=1, col=1,
+            )
     else:
         # Single-worker mode: original rendering
         fig.add_trace(
@@ -469,7 +493,7 @@ def create_concentration_figure(
     """Create a full-width concentration heatmap."""
     fig = make_subplots(rows=1, cols=1)
 
-    conc_display = np.log10(np.maximum(concentration_ppm, 1e-3))
+    conc_display = np.log10(np.maximum(np.nan_to_num(concentration_ppm, nan=0.0), 1e-3))
 
     fig.add_trace(
         go.Heatmap(
@@ -563,7 +587,7 @@ def create_site_figure(
     )
 
     # --- Left panel: Concentration heatmap ---
-    conc_display = np.log10(np.maximum(concentration_ppm, 1e-3))
+    conc_display = np.log10(np.maximum(np.nan_to_num(concentration_ppm, nan=0.0), 1e-3))
 
     fig.add_trace(
         go.Heatmap(
@@ -911,11 +935,15 @@ def create_prior_posterior_figure(
         horizontal_spacing=0.12,
     )
 
+    # Shared zmax from 99th percentile of combined data for consistent color scaling
+    combined_max = float(np.percentile(np.concatenate([prior.ravel(), posterior.ravel()]), 99))
+    zmax_shared = max(combined_max, 0.01)
+
     # Left panel: Prior
     fig.add_trace(
         go.Heatmap(
             x=grid_x[0, :], y=grid_y[:, 0], z=prior,
-            colorscale="YlOrRd", zmin=0, zmax=max(float(np.max(prior)), 0.01),
+            colorscale="YlOrRd", zmin=0, zmax=zmax_shared,
             colorbar=dict(title="P(leak)", x=0.42, thickness=15, len=0.75),
             name="Prior",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P: %{z:.4f}<extra></extra>",
@@ -927,7 +955,7 @@ def create_prior_posterior_figure(
     fig.add_trace(
         go.Heatmap(
             x=grid_x[0, :], y=grid_y[:, 0], z=posterior,
-            colorscale="YlOrRd", zmin=0, zmax=max(float(np.max(posterior)), 0.01),
+            colorscale="YlOrRd", zmin=0, zmax=zmax_shared,
             colorbar=dict(title="P(leak)", x=1.0, thickness=15, len=0.75),
             name="Posterior",
             hovertemplate="x: %{x:.0f}m<br>y: %{y:.0f}m<br>P: %{z:.4f}<extra></extra>",
@@ -982,8 +1010,17 @@ def create_convergence_figure(
 
     Shows a dashed horizontal line at the initial entropy for reference.
     """
+    if len(entropy_history) < 2:
+        fig = go.Figure()
+        fig.add_annotation(text="Not enough data for convergence chart", showarrow=False)
+        fig.update_layout(
+            template="plotly_dark", height=350,
+            margin=dict(l=50, r=30, t=40, b=50),
+        )
+        return fig
+
     steps = list(range(len(entropy_history)))
-    initial = entropy_history[0] if entropy_history else 0.0
+    initial = entropy_history[0]
 
     fig = go.Figure()
 

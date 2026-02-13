@@ -1,0 +1,10 @@
+[
+  {"direction": 0,   "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 45,  "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 90,  "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 135, "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 180, "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 225, "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 270, "speed": 3.0, "stability_class": "D", "weight": 0.125},
+  {"direction": 315, "speed": 3.0, "stability_class": "D", "weight": 0.125}
+]

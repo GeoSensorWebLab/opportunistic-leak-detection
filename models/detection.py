@@ -15,6 +15,7 @@ Typical handheld methane detectors:
 """
 
 import numpy as np
+from scipy.special import expit
 from config import DETECTION_THRESHOLD_PPM, DETECTION_STEEPNESS, SENSOR_MDL_PPM
 
 
@@ -45,10 +46,8 @@ def detection_probability(
     Returns:
         Probability of detection, same shape as input, values in [0, 1].
     """
-    exponent = -steepness * (concentration_ppm - threshold_ppm)
-    # Clip to avoid overflow in exp
-    exponent = np.clip(exponent, -50, 50)
-    prob = 1.0 / (1.0 + np.exp(exponent))
+    # Numerically stable sigmoid via scipy.special.expit
+    prob = expit(steepness * (concentration_ppm - threshold_ppm))
 
     # Hard cutoff: zero probability below the minimum detection limit
     if mdl_ppm > 0:

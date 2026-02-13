@@ -6,7 +6,9 @@ well a routing strategy localises leak sources.
 """
 
 import numpy as np
-from typing import List, Optional
+from typing import Dict, List, Optional
+from scipy.optimize import linear_sum_assignment
+from scipy.stats import ttest_rel
 
 from optimization.information_gain import compute_total_entropy
 
@@ -84,20 +86,14 @@ def localization_rmse(
 
     true_xy = np.array([[s["x"], s["y"]] for s in true_sources])
 
-    # Greedy nearest-source matching
-    used = set()
-    sq_errors = []
-    for sx, sy in true_xy:
-        best_dist = float("inf")
-        for i in range(len(peak_x)):
-            if i in used:
-                continue
-            d = np.hypot(peak_x[i] - sx, peak_y[i] - sy)
-            if d < best_dist:
-                best_dist = d
-                best_i = i
-        used.add(best_i)
-        sq_errors.append(best_dist ** 2)
+    # Optimal matching via the Hungarian algorithm (minimises total distance)
+    peak_xy = np.column_stack([peak_x, peak_y])
+    cost = np.zeros((len(true_xy), len(peak_xy)))
+    for i, (sx, sy) in enumerate(true_xy):
+        cost[i] = np.hypot(peak_xy[:, 0] - sx, peak_xy[:, 1] - sy)
+
+    row_ind, col_ind = linear_sum_assignment(cost)
+    sq_errors = cost[row_ind, col_ind] ** 2
 
     return float(np.sqrt(np.mean(sq_errors)))
 
@@ -187,3 +183,94 @@ def first_detection_step(detection_events: List[bool]) -> Optional[int]:
         if det:
             return i
     return None
+
+
+# ---------------------------------------------------------------------------
+# Statistical significance helpers
+# ---------------------------------------------------------------------------
+
+def paired_significance_test(
+    metric_a: List[float],
+    metric_b: List[float],
+    alpha: float = 0.05,
+) -> Dict[str, float]:
+    """Paired t-test for two matched metric vectors.
+
+    Args:
+        metric_a: Metric values for strategy/condition A.
+        metric_b: Metric values for strategy/condition B (same length).
+        alpha: Significance level.
+
+    Returns:
+        Dict with keys: mean_diff, p_value, significant, ci_lower, ci_upper.
+
+    Raises:
+        ValueError: If inputs have different lengths or fewer than 2 elements.
+    """
+    a = np.asarray(metric_a, dtype=float)
+    b = np.asarray(metric_b, dtype=float)
+    if len(a) != len(b):
+        raise ValueError(
+            f"Input lengths must match: got {len(a)} and {len(b)}"
+        )
+    if len(a) < 2:
+        raise ValueError("Need at least 2 paired observations")
+
+    diff = a - b
+    mean_diff = float(np.mean(diff))
+    t_stat, p_value = ttest_rel(a, b)
+    p_value = float(p_value)
+
+    # 95% confidence interval for the mean difference
+    se = float(np.std(diff, ddof=1) / np.sqrt(len(diff)))
+    from scipy.stats import t as t_dist
+    t_crit = float(t_dist.ppf(1.0 - alpha / 2.0, df=len(diff) - 1))
+    ci_lower = mean_diff - t_crit * se
+    ci_upper = mean_diff + t_crit * se
+
+    return {
+        "mean_diff": mean_diff,
+        "p_value": p_value,
+        "significant": p_value < alpha,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+    }
+
+
+def bootstrap_confidence_interval(
+    values: List[float],
+    confidence: float = 0.95,
+    n_bootstrap: int = 10000,
+    seed: int = 42,
+) -> Dict[str, float]:
+    """Bootstrap confidence interval for the mean.
+
+    Args:
+        values: Sample values.
+        confidence: Confidence level (e.g. 0.95 for 95%).
+        n_bootstrap: Number of bootstrap resamples.
+        seed: Random seed for reproducibility.
+
+    Returns:
+        Dict with keys: mean, ci_lower, ci_upper, std.
+    """
+    arr = np.asarray(values, dtype=float)
+    if len(arr) == 0:
+        raise ValueError("Cannot bootstrap from empty array")
+
+    rng = np.random.default_rng(seed)
+    boot_means = np.empty(n_bootstrap)
+    for i in range(n_bootstrap):
+        sample = rng.choice(arr, size=len(arr), replace=True)
+        boot_means[i] = np.mean(sample)
+
+    alpha = 1.0 - confidence
+    ci_lower = float(np.percentile(boot_means, 100 * alpha / 2))
+    ci_upper = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+
+    return {
+        "mean": float(np.mean(arr)),
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+        "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
+    }
