@@ -13,6 +13,11 @@ DEFAULT_WIND_SPEED = 3.0       # m/s
 DEFAULT_WIND_DIRECTION = 270   # Meteorological convention: direction wind comes FROM (degrees)
 DEFAULT_STABILITY_CLASS = "D"  # Neutral stability
 
+# --- Temporal / Intermittent Leak Defaults ---
+DEFAULT_DUTY_CYCLE = 1.0        # 1.0 = always on (backward compatible)
+DEFAULT_PUFF_MASS_KG = 5.0      # Instantaneous puff release mass (kg)
+DEFAULT_PUFF_TIME_S = 60.0      # Default time since puff release (seconds)
+
 # --- Detection ---
 SENSOR_MDL_PPM = 1.0           # Minimum Detection Limit — hard floor below which P(detect) = 0
 DETECTION_THRESHOLD_PPM = 5.0  # Sigmoid midpoint — concentration at which P(detect) = 50%
@@ -33,7 +38,7 @@ CACHE_MAX_ENTRIES = 32         # Max entries for opportunity map cache
 
 # --- Route / Walking ---
 WALKING_SPEED_MPS = 1.2          # Typical field walking speed (~4.3 km/h)
-PATH_ARROW_INTERVAL_M = 80       # Spacing for direction arrows along paths
+PATH_ARROW_INTERVAL_M = 150      # Spacing for direction arrows along paths
 DETOUR_TOLERANCE_M = 5.0         # Distance threshold for identifying detour segments
 
 # --- Visualization ---
@@ -70,6 +75,9 @@ PRIOR_KERNEL_RADIUS_M = 100.0  # Gaussian kernel radius for spatial prior
 
 # --- Bayesian Update ---
 FALSE_ALARM_RATE = 0.01           # P(detection | no leak) for Bayes denominator
+
+# --- Information-Theoretic Scoring ---
+EER_SUBSAMPLE = 4                 # Subsample factor for EER grid (1 = full, 4 = every 4th cell)
 
 # --- Wind Ensemble ---
 DEFAULT_ENSEMBLE_SCENARIOS = 8    # Number of wind scenarios for ensemble averaging

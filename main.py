@@ -43,6 +43,11 @@ from visualization.plots import (
     create_concentration_figure,
     create_score_profile,
 )
+from optimization.information_gain import (
+    compute_information_scores,
+    compute_ensemble_information_scores,
+    compute_total_entropy,
+)
 from visualization.compass_widget import compass_html
 from config import (
     DEFAULT_WIND_SPEED,
@@ -57,6 +62,8 @@ from config import (
     DETECTION_THRESHOLD_PPM,
     DEFAULT_ENSEMBLE_SCENARIOS,
     DEFAULT_WIND_SPREAD_DEG,
+    DEFAULT_DUTY_CYCLE,
+    DEFAULT_PUFF_TIME_S,
 )
 
 # ── Page Config ──────────────────────────────────────────────────────────────
@@ -183,6 +190,14 @@ components.html(compass_html(wind_direction, wind_speed), height=200)
 
 st.sidebar.header("Optimizer Settings")
 
+scoring_mode = st.sidebar.radio(
+    "Scoring Method",
+    ["Heuristic", "Information-Theoretic (EER)"],
+    help="**Heuristic**: P(detect) / deviation — fast, uses detection probability. "
+         "**EER**: Expected Entropy Reduction — measures where you learn the "
+         "most about leak locations. Requires prior risk model.",
+)
+
 max_deviation = st.sidebar.slider(
     "Max Path Deviation (m)",
     min_value=50,
@@ -203,6 +218,35 @@ grid_resolution = st.sidebar.select_slider(
     options=[2, 5, 10, 20],
     value=GRID_RESOLUTION_M,
 )
+
+plume_mode = st.sidebar.radio(
+    "Plume Model",
+    ["Instantaneous (standard)", "Crosswind-Integrated", "Gaussian Puff"],
+    help="**Instantaneous**: Standard Gaussian plume — sharp, narrow peaks. "
+         "**Crosswind-Integrated**: Integrates out lateral dispersion for "
+         "broader, lower-peak plumes that better match time-averaged field "
+         "measurements under turbulent conditions. "
+         "**Gaussian Puff**: Instantaneous release model — a single mass "
+         "puff drifting downwind, suitable for intermittent/episodic leaks.",
+)
+if "Crosswind" in plume_mode:
+    plume_mode_key = "integrated"
+elif "Puff" in plume_mode:
+    plume_mode_key = "puff"
+else:
+    plume_mode_key = "instantaneous"
+
+puff_time_s = DEFAULT_PUFF_TIME_S
+if plume_mode_key == "puff":
+    puff_time_s = st.sidebar.slider(
+        "Time Since Puff Release (s)",
+        min_value=10.0,
+        max_value=600.0,
+        value=DEFAULT_PUFF_TIME_S,
+        step=10.0,
+        help="Time elapsed since the instantaneous puff release. "
+             "Larger values mean the puff has traveled farther and dispersed more.",
+    )
 
 # ── Sensor Settings ─────────────────────────────────────────────────────────
 
@@ -245,6 +289,16 @@ use_prior = st.sidebar.checkbox(
     help="When enabled, recommendations are biased toward equipment with "
          "higher leak probability based on age, type, production rate, "
          "and inspection recency.",
+)
+
+# ── Temporal Behavior ──────────────────────────────────────────────────────
+
+st.sidebar.header("Temporal Behavior")
+
+st.sidebar.caption(
+    "Duty cycle: fraction of time each source is actively emitting "
+    "(1.0 = continuous, 0.0 = never). Reflects intermittent leaks "
+    "from pressure cycling, thermal effects, etc."
 )
 
 # ── Bayesian Update Settings ───────────────────────────────────────────────
@@ -306,6 +360,18 @@ sources = get_leak_sources()
 baseline_path = get_baseline_path()
 facility_layout = get_facility_layout()
 
+# Apply per-source duty cycle sliders (in the Temporal Behavior sidebar section)
+for src in sources:
+    dc = st.sidebar.slider(
+        f"Duty Cycle — {src['name']}",
+        min_value=0.0,
+        max_value=1.0,
+        value=float(src.get("duty_cycle", DEFAULT_DUTY_CYCLE)),
+        step=0.05,
+        key=f"dc_{src['name']}",
+    )
+    src["duty_cycle"] = dc
+
 # ── Prior Computation ───────────────────────────────────────────────────────
 
 prior_probs = compute_all_priors(sources)
@@ -317,9 +383,10 @@ if use_prior:
 
 # ── Cached Computation ───────────────────────────────────────────────────────
 
-# Convert sources to a hashable key for the cache
+# Convert sources to a hashable key for the cache (6-tuple with duty_cycle)
 sources_key = tuple(
-    (s["name"], s["x"], s["y"], s["z"], s["emission_rate"]) for s in sources
+    (s["name"], s["x"], s["y"], s["z"], s["emission_rate"], s.get("duty_cycle", 1.0))
+    for s in sources
 )
 
 # Hashable baseline path key for path-deviation cache
@@ -338,6 +405,7 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
             resolution=grid_resolution,
             mdl_ppm=sensor_mdl,
             threshold_ppm=sensor_threshold,
+            plume_mode=plume_mode_key,
         )
     else:
         X, Y, concentration_ppm, detection_prob = cached_opportunity_map(
@@ -349,6 +417,7 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
             resolution=grid_resolution,
             mdl_ppm=sensor_mdl,
             threshold_ppm=sensor_threshold,
+            plume_mode=plume_mode_key,
         )
 
     # ── Bayesian Belief Update ──────────────────────────────────────────────
@@ -374,16 +443,57 @@ with st.spinner("Computing plume dispersion and opportunity map..."):
         baseline_path_key=baseline_path_key,
     )
 
-    scores = compute_tasking_scores(
-        grid_x=X,
-        grid_y=Y,
-        detection_prob=detection_prob,
-        baseline_path=baseline_path,
-        epsilon=DEVIATION_EPSILON,
-        max_deviation=float(max_deviation),
-        precomputed_deviation=deviation,
-        prior_weight=scoring_prior,
-    )
+    # ── Scoring ────────────────────────────────────────────────────────────
+    use_eer = scoring_mode == "Information-Theoretic (EER)"
+
+    if use_eer and scoring_prior is None:
+        st.warning(
+            "Information-theoretic scoring requires the prior risk model. "
+            "Falling back to heuristic scoring."
+        )
+        use_eer = False
+
+    if use_eer:
+        avg_emission = float(np.mean(
+            [s["emission_rate"] * s.get("duty_cycle", 1.0) for s in sources]
+        ))
+        spinner_msg = "Computing Expected Entropy Reduction (EER)..."
+        with st.spinner(spinner_msg):
+            if use_ensemble and wind_scenarios:
+                scores = compute_ensemble_information_scores(
+                    grid_x=X,
+                    grid_y=Y,
+                    belief=scoring_prior,
+                    deviation=deviation,
+                    max_deviation=float(max_deviation),
+                    wind_scenarios=wind_scenarios,
+                    avg_emission=avg_emission,
+                    epsilon=DEVIATION_EPSILON,
+                )
+            else:
+                scores = compute_information_scores(
+                    grid_x=X,
+                    grid_y=Y,
+                    belief=scoring_prior,
+                    deviation=deviation,
+                    max_deviation=float(max_deviation),
+                    wind_speed=wind_speed,
+                    wind_direction_deg=float(wind_direction),
+                    stability_class=stability_class,
+                    avg_emission=avg_emission,
+                    epsilon=DEVIATION_EPSILON,
+                )
+    else:
+        scores = compute_tasking_scores(
+            grid_x=X,
+            grid_y=Y,
+            detection_prob=detection_prob,
+            baseline_path=baseline_path,
+            epsilon=DEVIATION_EPSILON,
+            max_deviation=float(max_deviation),
+            precomputed_deviation=deviation,
+            prior_weight=scoring_prior,
+        )
 
     recommendations = recommend_waypoints(
         grid_x=X,
@@ -414,19 +524,20 @@ m3.metric(
 m4.metric("Detour Points", f"{metrics['num_detour_points']}")
 m5.metric("Avg Detection Prob", f"{metrics['avg_detection_prob']:.1%}")
 
-# ── Tabbed Visualization ────────────────────────────────────────────────────
+# ── Visualization ──────────────────────────────────────────────────────────
 
-tab_names = ["Detection Map", "Concentration Map", "Side-by-Side"]
+view_options = ["Detection Map", "Concentration Map", "Side-by-Side"]
 if use_bayesian and belief_map is not None:
-    tab_names.append("Belief Map")
+    view_options.append("Belief Map")
 
-tabs = st.tabs(tab_names)
-tab_detect = tabs[0]
-tab_conc = tabs[1]
-tab_dual = tabs[2]
-tab_belief = tabs[3] if len(tabs) > 3 else None
+active_view = st.radio(
+    "Map View",
+    view_options,
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
-with tab_detect:
+if active_view == "Detection Map":
     fig_detect = create_single_map_figure(
         grid_x=X,
         grid_y=Y,
@@ -441,7 +552,7 @@ with tab_detect:
     )
     st.plotly_chart(fig_detect, use_container_width=True)
 
-with tab_conc:
+elif active_view == "Concentration Map":
     fig_conc = create_concentration_figure(
         grid_x=X,
         grid_y=Y,
@@ -453,7 +564,7 @@ with tab_conc:
     )
     st.plotly_chart(fig_conc, use_container_width=True)
 
-with tab_dual:
+elif active_view == "Side-by-Side":
     fig_site = create_site_figure(
         grid_x=X,
         grid_y=Y,
@@ -469,65 +580,64 @@ with tab_dual:
     )
     st.plotly_chart(fig_site, use_container_width=True)
 
-if tab_belief is not None and belief_map is not None:
-    with tab_belief:
-        fig_belief = create_single_map_figure(
-            grid_x=X,
-            grid_y=Y,
-            detection_prob=belief_map,
-            sources=sources,
-            baseline_path=baseline_path,
-            optimized_path=optimized_path,
-            recommendations=recommendations,
-            wind_speed=wind_speed,
-            wind_direction_deg=wind_direction,
-            facility_layout=facility_layout,
-            colorbar_title="P(leak)",
-        )
-        # Overlay measurement markers
-        measurements = st.session_state.get("bayesian_measurements", [])
-        if measurements:
-            det_x = [m.x for m in measurements if m.detected]
-            det_y = [m.y for m in measurements if m.detected]
-            nodet_x = [m.x for m in measurements if not m.detected]
-            nodet_y = [m.y for m in measurements if not m.detected]
+elif active_view == "Belief Map" and belief_map is not None:
+    import copy
+    fig_belief = copy.deepcopy(create_single_map_figure(
+        grid_x=X,
+        grid_y=Y,
+        detection_prob=belief_map,
+        sources=sources,
+        baseline_path=baseline_path,
+        optimized_path=optimized_path,
+        recommendations=recommendations,
+        wind_speed=wind_speed,
+        wind_direction_deg=wind_direction,
+        facility_layout=facility_layout,
+        colorbar_title="P(leak)",
+    ))
+    # Overlay measurement markers
+    measurements = st.session_state.get("bayesian_measurements", [])
+    if measurements:
+        import plotly.graph_objects as go
+        det_x = [m.x for m in measurements if m.detected]
+        det_y = [m.y for m in measurements if m.detected]
+        nodet_x = [m.x for m in measurements if not m.detected]
+        nodet_y = [m.y for m in measurements if not m.detected]
 
-            if det_x:
-                import plotly.graph_objects as go
-                fig_belief.add_trace(
-                    go.Scatter(
-                        x=det_x,
-                        y=det_y,
-                        mode="markers",
-                        marker=dict(
-                            size=14,
-                            color="limegreen",
-                            symbol="circle",
-                            line=dict(width=2, color="white"),
-                        ),
-                        name="Detection (+)",
-                        hovertemplate="Detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
-                    )
+        if det_x:
+            fig_belief.add_trace(
+                go.Scatter(
+                    x=det_x,
+                    y=det_y,
+                    mode="markers",
+                    marker=dict(
+                        size=14,
+                        color="limegreen",
+                        symbol="circle",
+                        line=dict(width=2, color="white"),
+                    ),
+                    name="Detection (+)",
+                    hovertemplate="Detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
                 )
-            if nodet_x:
-                import plotly.graph_objects as go
-                fig_belief.add_trace(
-                    go.Scatter(
-                        x=nodet_x,
-                        y=nodet_y,
-                        mode="markers",
-                        marker=dict(
-                            size=14,
-                            color="red",
-                            symbol="x",
-                            line=dict(width=2, color="white"),
-                        ),
-                        name="Non-detection (-)",
-                        hovertemplate="Non-detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
-                    )
+            )
+        if nodet_x:
+            fig_belief.add_trace(
+                go.Scatter(
+                    x=nodet_x,
+                    y=nodet_y,
+                    mode="markers",
+                    marker=dict(
+                        size=14,
+                        color="red",
+                        symbol="x",
+                        line=dict(width=2, color="white"),
+                    ),
+                    name="Non-detection (-)",
+                    hovertemplate="Non-detection<br>(%{x:.0f}, %{y:.0f})<extra></extra>",
                 )
+            )
 
-        st.plotly_chart(fig_belief, use_container_width=True)
+    st.plotly_chart(fig_belief, use_container_width=True)
 
 # Score bar chart
 fig_scores = create_score_profile(recommendations)
@@ -585,16 +695,26 @@ with st.expander("Equipment Risk Assessment (Prior Model)"):
 # ── Info Panel ───────────────────────────────────────────────────────────────
 
 with st.expander("About the Model"):
-    scoring_formula = (
-        "`Score = Prior(x,y) * P(detection) / (PathDeviation + epsilon)`"
-        if use_prior
-        else "`Score = P(detection) / (PathDeviation + epsilon)`"
-    )
+    if use_eer:
+        scoring_formula = (
+            "`Score = EER(x,y) / (PathDeviation + epsilon)` "
+            "where EER = Expected Entropy Reduction (bits of information gained)"
+        )
+    elif use_prior:
+        scoring_formula = (
+            "`Score = Prior(x,y) * P(detection) / (PathDeviation + epsilon)`"
+        )
+    else:
+        scoring_formula = (
+            "`Score = P(detection) / (PathDeviation + epsilon)`"
+        )
     st.markdown(
         f"""
         **Gaussian Plume Model** — Standard atmospheric dispersion model for
         continuous point sources. Uses Pasquill-Gifford stability classes (A-F)
-        to determine lateral and vertical dispersion coefficients.
+        to determine lateral and vertical dispersion coefficients. The
+        *crosswind-integrated* variant integrates out lateral dispersion,
+        producing broader plumes that better match time-averaged field data.
 
         **Detection Probability** — Sigmoid function centered at the sensor's
         detection threshold ({sensor_threshold} ppm), with a hard Minimum
@@ -609,10 +729,25 @@ with st.expander("About the Model"):
         **Tasking Score** — {scoring_formula}
         where `epsilon` prevents division-by-zero for on-path locations.
 
+        **Information-Theoretic Scoring (EER)** — When enabled, replaces
+        the heuristic score with Expected Entropy Reduction. For each
+        candidate measurement location, computes the expected reduction in
+        belief-map uncertainty considering both detection and non-detection
+        outcomes. Answers: *"Where should I measure to learn the most?"*
+        (Stage 3 of Bayesian architecture).
+
         **Bayesian Belief Update** — When enabled, field observations
         (detections and non-detections) update the spatial belief map via
         cell-wise Bayes' theorem, refining leak location estimates after
         each measurement (Stage 2 of Bayesian architecture).
+
+        **Temporal Behavior (Duty Cycle)** — Real methane leaks are often
+        intermittent due to pressure cycling, thermal effects, and
+        operational changes. Each source has a duty cycle (0–1) representing
+        the fraction of time it actively emits. Emission rates are scaled
+        by duty cycle for time-averaged modeling. The *Gaussian Puff* plume
+        model simulates a single instantaneous mass release drifting
+        downwind, suitable for episodic/intermittent leak events.
 
         **Wind Ensemble** — When enabled, averages detection probability
         across multiple wind scenarios (rose, directional fan, or custom)
@@ -634,5 +769,6 @@ with st.expander("Leak Source Details"):
     for src in sources:
         st.markdown(
             f"- **{src['name']}**: position ({src['x']}, {src['y']}) m, "
-            f"height {src['z']} m, emission rate {src['emission_rate']} kg/s"
+            f"height {src['z']} m, emission rate {src['emission_rate']} kg/s, "
+            f"duty cycle {src.get('duty_cycle', 1.0):.0%}"
         )

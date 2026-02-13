@@ -27,20 +27,25 @@ MethaneSimulator/
 ├── config.py                     # Global constants & Pasquill-Gifford coefficients
 ├── pyproject.toml                # Dependencies (uv)
 ├── models/
-│   ├── gaussian_plume.py         # Gaussian plume dispersion equation
+│   ├── gaussian_plume.py         # Gaussian plume dispersion (standard + crosswind-integrated)
 │   ├── detection.py              # Sigmoid detection probability model
 │   ├── prior.py                  # Stage 1 prior: equipment risk → spatial prior
 │   ├── measurement.py            # Measurement dataclass for field observations
 │   └── bayesian.py               # Stage 2 Bayesian belief map (posterior updates)
 ├── optimization/
 │   ├── opportunity_map.py        # 2D grid heatmap aggregation + wind ensemble
-│   └── tasking.py                # Cost function, waypoint ranking, path insertion
+│   ├── tasking.py                # Cost function, waypoint ranking, path insertion
+│   └── information_gain.py       # Stage 3: Expected Entropy Reduction (EER) scoring
 ├── visualization/
 │   ├── plots.py                  # Plotly interactive site maps & charts
 │   └── compass_widget.py         # SVG wind compass widget
 ├── data/
 │   ├── mock_data.py              # Synthetic leak sources, paths, wind presets & distributions
 │   └── facility_layout.py        # Facility infrastructure layout definitions
+├── validation/
+│   ├── synthetic_twin.py         # Synthetic experiment engine & strategy implementations
+│   ├── scenarios.py              # Pre-defined test scenarios (A-E)
+│   └── metrics.py                # Detection, efficiency, and learning metrics
 └── tests/
     ├── conftest.py               # Shared pytest fixtures
     ├── test_gaussian_plume.py    # Plume dispersion tests
@@ -50,20 +55,24 @@ MethaneSimulator/
     ├── test_prior.py             # Prior model tests
     ├── test_bayesian.py          # Bayesian belief map & measurement tests
     ├── test_ensemble.py          # Wind ensemble tests
+    ├── test_information_gain.py  # EER information-theoretic scoring tests
+    ├── test_synthetic_twin.py    # Synthetic twin validation tests
+    ├── test_temporal.py          # Duty cycle, Gaussian puff, intermittent leak tests
     └── test_integration.py       # End-to-end pipeline tests
 ```
 
 ## Architecture & Data Flow
 
 1. **Data layer** (`data/`) provides leak sources, worker paths, facility layout, and wind distributions
-2. **Physics engine** (`models/gaussian_plume.py`) computes plume concentrations using Gaussian dispersion
+2. **Physics engine** (`models/gaussian_plume.py`) computes plume concentrations using Gaussian dispersion; supports both standard (instantaneous) and crosswind-integrated formulations
 3. **Detection model** (`models/detection.py`) converts concentrations to detection probabilities via sigmoid
 4. **Prior model** (`models/prior.py`) computes per-source leak probability from equipment attributes (Stage 1 Bayesian)
 5. **Opportunity map** (`optimization/opportunity_map.py`) aggregates all sources into a site-wide probability grid; supports single-scenario or **wind ensemble** (weighted average across multiple wind conditions)
 6. **Bayesian belief map** (`models/bayesian.py`) updates spatial belief via cell-wise Bayes' theorem after field observations (Stage 2 Bayesian); uses vectorized reverse-plume computation
-7. **Tasking optimizer** (`optimization/tasking.py`) scores grid cells by detection value vs path deviation cost, optionally weighted by prior or posterior belief
-8. **Visualization** (`visualization/`) renders interactive maps, compass widget, belief map, and score charts
-9. **Streamlit UI** (`main.py`) ties it all together with sidebar controls and `st.session_state` for Bayesian measurement persistence
+7. **Tasking optimizer** (`optimization/tasking.py`) scores grid cells by detection value vs path deviation cost, optionally weighted by prior or posterior belief (heuristic mode)
+8. **Information-theoretic scoring** (`optimization/information_gain.py`) computes Expected Entropy Reduction (EER) at each grid cell — answers *"where should I measure to learn the most?"* (Stage 3 Bayesian); uses subsampled grid + bilinear interpolation for efficiency; supports single-wind and ensemble modes
+9. **Visualization** (`visualization/`) renders interactive maps, compass widget, belief map, and score charts
+10. **Streamlit UI** (`main.py`) ties it all together with sidebar controls, scoring mode toggle (Heuristic vs EER), and `st.session_state` for Bayesian measurement persistence
 
 ## Key Conventions
 
@@ -89,6 +98,11 @@ MethaneSimulator/
 - **Bayesian reverse plume**: for each grid cell as hypothetical source, compute concentration at measurement point — fully vectorized (no per-cell loop)
 - **Bayesian update**: cell-wise `P(leak_i | obs) = P(obs | leak_i) * P(leak_i) / P(obs)`, with `FALSE_ALARM_RATE` (default 0.01) for the no-leak likelihood
 - **Wind ensemble**: weighted average `E[P] = Σ w_i * P_i` across scenarios; weights must sum to 1.0
+- **Expected Entropy Reduction (EER)**: per-cell binary entropy `H(p) = -p*log2(p) - (1-p)*log2(1-p)`; EER at candidate *m* = `Σ_cells [H_current - P(obs)*H(posterior|obs) - P(¬obs)*H(posterior|¬obs)]`; cells are independent so total EER is sum of per-cell reductions; uses subsampled grid (`EER_SUBSAMPLE=4`) + `RegularGridInterpolator` for performance
+- **Crosswind-integrated plume**: `C = Q / (√(2π) * u * σz) * [exp(-½((z-H)/σz)²) + exp(-½((z+H)/σz)²)]` — integrates out σy lateral dispersion, producing broader, lower-peak plumes that better match time-averaged field measurements; selectable via `plume_mode` parameter ("instantaneous", "integrated", or "puff")
+- **Gaussian puff model**: `C = Q_total / ((2π)^(3/2) σx σy σz) * exp(-½((x_d - u*t)/σx)²) * exp(-½(y_c/σy)²) * [vertical with ground reflection]` — instantaneous release that drifts downwind as a 3D Gaussian cloud; `σx = σy` (isotropic horizontal dispersion); suitable for intermittent/episodic leaks; selectable via `plume_mode="puff"`
+- **Duty cycle**: fraction of time a source actively emits (0–1); `effective_rate = emission_rate * duty_cycle`; all lookups use `.get("duty_cycle", 1.0)` for backward compatibility
+- **Time-resolved mode** (synthetic twin): Bernoulli draw per source per measurement (`on` with probability `duty_cycle`, else `off`); contrasts with default time-averaged mode that scales emission by duty cycle deterministically
 
 ## Integration Points (for future real data)
 

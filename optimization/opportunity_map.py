@@ -9,7 +9,12 @@ import numpy as np
 import streamlit as st
 from typing import List, Tuple
 
-from models.gaussian_plume import gaussian_plume, concentration_to_ppm
+from models.gaussian_plume import (
+    gaussian_plume,
+    crosswind_integrated_plume,
+    gaussian_puff,
+    concentration_to_ppm,
+)
 from models.detection import detection_probability
 from config import (
     GRID_SIZE_M,
@@ -18,6 +23,8 @@ from config import (
     CACHE_MAX_ENTRIES,
     SENSOR_MDL_PPM,
     DETECTION_THRESHOLD_PPM,
+    DEFAULT_PUFF_MASS_KG,
+    DEFAULT_PUFF_TIME_S,
 )
 
 
@@ -51,6 +58,7 @@ def compute_opportunity_map(
     receptor_height: float = RECEPTOR_HEIGHT_M,
     mdl_ppm: float = SENSOR_MDL_PPM,
     threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+    plume_mode: str = "instantaneous",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate a combined detection-probability heat map from all leak sources.
@@ -71,6 +79,9 @@ def compute_opportunity_map(
         receptor_height: Sensor height above ground (meters).
         mdl_ppm: Sensor Minimum Detection Limit in ppm.
         threshold_ppm: Sigmoid midpoint for detection probability.
+        plume_mode: ``"instantaneous"`` for the standard Gaussian plume or
+                    ``"integrated"`` for the crosswind-integrated formulation
+                    (broader, lower-peak plumes matching time-averaged data).
 
     Returns:
         (X, Y, concentration_ppm, detection_prob) — all 2D arrays.
@@ -83,18 +94,40 @@ def compute_opportunity_map(
     total_conc = np.zeros_like(X, dtype=float)
 
     for src in sources:
-        total_conc += gaussian_plume(
-            receptor_x=X,
-            receptor_y=Y,
-            receptor_z=receptor_height,
-            source_x=src["x"],
-            source_y=src["y"],
-            source_z=src.get("z", 0.0),
-            emission_rate=src["emission_rate"],
-            wind_speed=wind_speed,
-            wind_direction_deg=wind_direction_deg,
-            stability_class=stability_class,
-        )
+        duty_cycle = src.get("duty_cycle", 1.0)
+        effective_rate = src["emission_rate"] * duty_cycle
+
+        if plume_mode == "puff":
+            total_conc += gaussian_puff(
+                receptor_x=X,
+                receptor_y=Y,
+                receptor_z=receptor_height,
+                source_x=src["x"],
+                source_y=src["y"],
+                source_z=src.get("z", 0.0),
+                total_mass=src.get("puff_mass", DEFAULT_PUFF_MASS_KG) * duty_cycle,
+                wind_speed=wind_speed,
+                wind_direction_deg=wind_direction_deg,
+                stability_class=stability_class,
+                time_since_release=src.get("puff_time", DEFAULT_PUFF_TIME_S),
+            )
+        else:
+            plume_fn = (
+                crosswind_integrated_plume if plume_mode == "integrated"
+                else gaussian_plume
+            )
+            total_conc += plume_fn(
+                receptor_x=X,
+                receptor_y=Y,
+                receptor_z=receptor_height,
+                source_x=src["x"],
+                source_y=src["y"],
+                source_z=src.get("z", 0.0),
+                emission_rate=effective_rate,
+                wind_speed=wind_speed,
+                wind_direction_deg=wind_direction_deg,
+                stability_class=stability_class,
+            )
 
     # Convert summed concentration to ppm, then derive detection probability
     concentration_ppm = concentration_to_ppm(total_conc)
@@ -113,6 +146,7 @@ def compute_ensemble_opportunity_map(
     receptor_height: float = RECEPTOR_HEIGHT_M,
     mdl_ppm: float = SENSOR_MDL_PPM,
     threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+    plume_mode: str = "instantaneous",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute a weighted-average opportunity map across multiple wind scenarios.
@@ -145,6 +179,7 @@ def compute_ensemble_opportunity_map(
             receptor_height=receptor_height,
             mdl_ppm=mdl_ppm,
             threshold_ppm=threshold_ppm,
+            plume_mode=plume_mode,
         )
         w = scenario["weight"]
         avg_conc += w * conc_ppm
@@ -162,6 +197,7 @@ def cached_ensemble_opportunity_map(
     receptor_height: float = RECEPTOR_HEIGHT_M,
     mdl_ppm: float = SENSOR_MDL_PPM,
     threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+    plume_mode: str = "instantaneous",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Cached wrapper around compute_ensemble_opportunity_map.
@@ -175,6 +211,7 @@ def cached_ensemble_opportunity_map(
             "y": s[2],
             "z": s[3],
             "emission_rate": s[4],
+            "duty_cycle": s[5] if len(s) > 5 else 1.0,
         }
         for s in sources_key
     ]
@@ -195,6 +232,7 @@ def cached_ensemble_opportunity_map(
         receptor_height=receptor_height,
         mdl_ppm=mdl_ppm,
         threshold_ppm=threshold_ppm,
+        plume_mode=plume_mode,
     )
 
 
@@ -209,6 +247,7 @@ def cached_opportunity_map(
     receptor_height: float = RECEPTOR_HEIGHT_M,
     mdl_ppm: float = SENSOR_MDL_PPM,
     threshold_ppm: float = DETECTION_THRESHOLD_PPM,
+    plume_mode: str = "instantaneous",
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Cached wrapper around compute_opportunity_map.
@@ -223,6 +262,7 @@ def cached_opportunity_map(
             "y": s[2],
             "z": s[3],
             "emission_rate": s[4],
+            "duty_cycle": s[5] if len(s) > 5 else 1.0,
         }
         for s in sources_key
     ]
@@ -236,4 +276,5 @@ def cached_opportunity_map(
         receptor_height=receptor_height,
         mdl_ppm=mdl_ppm,
         threshold_ppm=threshold_ppm,
+        plume_mode=plume_mode,
     )

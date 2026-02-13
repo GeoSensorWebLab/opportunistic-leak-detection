@@ -55,9 +55,11 @@ class BayesianBeliefMap:
         self.sources = sources
         self.measurements: List[Measurement] = []
 
-        # Average emission rate across known sources for reverse plume
+        # Average effective emission rate across known sources for reverse plume
         if sources:
-            self._avg_emission = np.mean([s["emission_rate"] for s in sources])
+            self._avg_emission = np.mean(
+                [s["emission_rate"] * s.get("duty_cycle", 1.0) for s in sources]
+            )
         else:
             self._avg_emission = 0.5
 
