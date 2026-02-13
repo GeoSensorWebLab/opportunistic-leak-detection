@@ -36,6 +36,38 @@ class DataProvider(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_wind_distribution(self) -> List[dict]:
+        """Return an 8-direction wind rose with equal weights.
+
+        Each dict must have keys: 'direction', 'speed', 'stability_class', 'weight'.
+        Weights must sum to 1.0.
+        """
+        ...
+
+    @abstractmethod
+    def get_wind_fan(
+        self,
+        center_direction: float,
+        spread_deg: float = 30.0,
+        num_scenarios: int = 8,
+        speed: float = 3.0,
+        stability_class: str = "D",
+    ) -> List[dict]:
+        """Generate a fan of wind directions around a center direction.
+
+        Args:
+            center_direction: Center direction in meteorological degrees.
+            spread_deg: Total angular spread of the fan.
+            num_scenarios: Number of scenarios in the fan.
+            speed: Wind speed for all scenarios.
+            stability_class: Stability class for all scenarios.
+
+        Returns:
+            List of dicts with keys: 'direction', 'speed', 'stability_class', 'weight'.
+        """
+        ...
+
 
 class MockDataProvider(DataProvider):
     """Wraps existing mock_data.py functions."""
@@ -51,3 +83,24 @@ class MockDataProvider(DataProvider):
     def get_wind_scenarios(self) -> List[dict]:
         from data.mock_data import get_wind_scenarios
         return get_wind_scenarios()
+
+    def get_wind_distribution(self) -> List[dict]:
+        from data.mock_data import get_wind_distribution
+        return get_wind_distribution()
+
+    def get_wind_fan(
+        self,
+        center_direction: float,
+        spread_deg: float = 30.0,
+        num_scenarios: int = 8,
+        speed: float = 3.0,
+        stability_class: str = "D",
+    ) -> List[dict]:
+        from data.mock_data import get_wind_fan
+        return get_wind_fan(
+            center_direction=center_direction,
+            spread_deg=spread_deg,
+            num_scenarios=num_scenarios,
+            speed=speed,
+            stability_class=stability_class,
+        )

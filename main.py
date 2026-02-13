@@ -16,10 +16,6 @@ import numpy as np
 import pandas as pd
 
 from data.interfaces import MockDataProvider
-from data.mock_data import (
-    get_wind_distribution,
-    get_wind_fan,
-)
 from data.facility_layout import get_facility_layout
 from optimization.opportunity_map import (
     cached_opportunity_map,
@@ -194,7 +190,7 @@ with st.sidebar.expander("Wind Conditions", expanded=True):
         )
 
         if ensemble_mode == "8-Direction Rose":
-            wind_scenarios = get_wind_distribution()
+            wind_scenarios = data_provider.get_wind_distribution()
         elif ensemble_mode == "Directional Fan":
             fan_center = st.slider(
                 "Fan Center Direction",
@@ -216,7 +212,7 @@ with st.sidebar.expander("Wind Conditions", expanded=True):
                 max_value=16,
                 value=DEFAULT_ENSEMBLE_SCENARIOS,
             )
-            wind_scenarios = get_wind_fan(
+            wind_scenarios = data_provider.get_wind_fan(
                 center_direction=float(fan_center),
                 spread_deg=fan_spread,
                 num_scenarios=fan_count,
