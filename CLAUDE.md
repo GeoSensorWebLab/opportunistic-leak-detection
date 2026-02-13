@@ -23,57 +23,66 @@ uv run streamlit run main.py     # start the app at localhost:8501
 
 ```
 MethaneSimulator/
-├── main.py                       # Streamlit app entry point
-├── config.py                     # Global constants & Pasquill-Gifford coefficients
-├── pyproject.toml                # Dependencies (uv)
+├── main.py                        # Streamlit app entry point
+├── config.py                      # Global constants & Pasquill-Gifford coefficients
+├── pyproject.toml                 # Dependencies (uv)
+├── .streamlit/
+│   └── config.toml                # Streamlit theme configuration
 ├── models/
-│   ├── gaussian_plume.py         # Gaussian plume dispersion (standard + crosswind-integrated)
-│   ├── detection.py              # Sigmoid detection probability model
-│   ├── prior.py                  # Stage 1 prior: equipment risk → spatial prior
-│   ├── measurement.py            # Measurement dataclass for field observations
-│   └── bayesian.py               # Stage 2 Bayesian belief map (posterior updates + set_belief)
+│   ├── __init__.py
+│   ├── gaussian_plume.py          # Gaussian plume dispersion (standard + crosswind-integrated)
+│   ├── detection.py               # Sigmoid detection probability model
+│   ├── prior.py                   # Stage 1 prior: equipment risk → spatial prior
+│   ├── measurement.py             # Measurement dataclass for field observations
+│   └── bayesian.py                # Stage 2 Bayesian belief map (posterior updates + set_belief)
 ├── optimization/
-│   ├── opportunity_map.py        # 2D grid heatmap aggregation + wind ensemble
-│   ├── tasking.py                # Cost function, waypoint ranking, path insertion
-│   ├── information_gain.py       # Stage 3: Expected Entropy Reduction (EER) scoring
-│   ├── multi_worker.py           # Multi-worker waypoint allocation & fleet coverage
-│   └── campaign.py               # Multi-day campaign planning with posterior carry-forward
+│   ├── __init__.py
+│   ├── opportunity_map.py         # 2D grid heatmap aggregation + wind ensemble
+│   ├── tasking.py                 # Cost function, waypoint ranking, path insertion
+│   ├── information_gain.py        # Stage 3: Expected Entropy Reduction (EER) scoring
+│   ├── metrics.py                 # Route metrics (distance, time, detour stats)
+│   ├── multi_worker.py            # Multi-worker waypoint allocation & fleet coverage
+│   └── campaign.py                # Multi-day campaign planning with posterior carry-forward
 ├── visualization/
-│   ├── plots.py                  # Plotly interactive site maps, entropy, convergence charts
-│   └── compass_widget.py         # SVG wind compass widget
+│   ├── __init__.py
+│   ├── plots.py                   # Plotly interactive site maps, entropy, convergence charts
+│   └── compass_widget.py          # SVG wind compass widget
 ├── pages/
-│   └── worker_guidance.py        # Field worker guidance page (priority zones, turn-by-turn)
+│   └── worker_guidance.py         # Field worker guidance page (priority zones, turn-by-turn)
 ├── data/
-│   ├── mock_data.py              # Synthetic leak sources, paths, wind presets & distributions
-│   ├── interfaces.py             # Abstract DataProvider ABC + MockDataProvider
-│   ├── weather.py                # WeatherProvider ABC + StubWeatherProvider
-│   ├── state_io.py               # Belief state serialization (NPZ + JSON)
-│   └── facility_layout.py        # Facility infrastructure layout definitions
+│   ├── __init__.py
+│   ├── mock_data.py               # Synthetic leak sources, paths, wind presets & distributions
+│   ├── interfaces.py              # Abstract DataProvider ABC + MockDataProvider
+│   ├── weather.py                 # WeatherProvider ABC + StubWeatherProvider
+│   ├── state_io.py                # Belief state serialization (NPZ + JSON)
+│   └── facility_layout.py         # Facility infrastructure layout definitions
 ├── validation/
-│   ├── synthetic_twin.py         # Synthetic experiment engine & strategy implementations
-│   ├── scenarios.py              # Pre-defined test scenarios (A-E)
-│   └── metrics.py                # Detection, efficiency, and learning metrics
+│   ├── __init__.py
+│   ├── synthetic_twin.py          # Synthetic experiment engine & strategy implementations
+│   ├── scenarios.py               # Pre-defined test scenarios (A-E)
+│   └── metrics.py                 # Detection, efficiency, and learning metrics
 ├── experiments/
 │   └── run_strategy_comparison.py # Batch strategy comparison across all scenarios
 └── tests/
-    ├── conftest.py               # Shared pytest fixtures
-    ├── test_gaussian_plume.py    # Plume dispersion tests
-    ├── test_detection.py         # Detection probability tests
-    ├── test_opportunity_map.py   # Opportunity map tests
-    ├── test_tasking.py           # Tasking optimizer tests
-    ├── test_prior.py             # Prior model tests
-    ├── test_bayesian.py          # Bayesian belief map & measurement tests
-    ├── test_ensemble.py          # Wind ensemble tests
-    ├── test_information_gain.py  # EER information-theoretic scoring tests
-    ├── test_synthetic_twin.py    # Synthetic twin validation + variable wind tests
-    ├── test_temporal.py          # Duty cycle, Gaussian puff, intermittent leak tests
-    ├── test_integration.py       # End-to-end pipeline tests
-    ├── test_plots.py             # Visualization smoke tests (all plot functions)
-    ├── test_multi_worker.py      # Multi-worker allocation tests
-    ├── test_campaign.py          # Campaign planning & serialization tests
-    ├── test_data_interfaces.py   # DataProvider ABC conformance tests
-    ├── test_state_io.py          # State serialization roundtrip tests
-    └── test_weather.py           # Weather API abstraction tests
+    ├── __init__.py
+    ├── conftest.py                # Shared pytest fixtures
+    ├── test_gaussian_plume.py     # Plume dispersion tests
+    ├── test_detection.py          # Detection probability tests
+    ├── test_opportunity_map.py    # Opportunity map tests
+    ├── test_tasking.py            # Tasking optimizer tests
+    ├── test_prior.py              # Prior model tests
+    ├── test_bayesian.py           # Bayesian belief map & measurement tests
+    ├── test_ensemble.py           # Wind ensemble tests
+    ├── test_information_gain.py   # EER information-theoretic scoring tests
+    ├── test_synthetic_twin.py     # Synthetic twin validation + variable wind tests
+    ├── test_temporal.py           # Duty cycle, Gaussian puff, intermittent leak tests
+    ├── test_integration.py        # End-to-end pipeline tests
+    ├── test_plots.py              # Visualization smoke tests (all plot functions)
+    ├── test_multi_worker.py       # Multi-worker allocation tests
+    ├── test_campaign.py           # Campaign planning & serialization tests
+    ├── test_data_interfaces.py    # DataProvider ABC conformance tests
+    ├── test_state_io.py           # State serialization roundtrip tests
+    └── test_weather.py            # Weather API abstraction tests
 ```
 
 ## Architecture & Data Flow
